@@ -1,0 +1,19 @@
+[project]
+name = "crate-digger"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Radosław Winiecki", email = "r.winiecki@outlook.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+]
+
+[tool.poetry]
+packages = [{include = "crate_digger", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
