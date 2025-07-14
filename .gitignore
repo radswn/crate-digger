@@ -1,5 +1,8 @@
-.venv
+.venv/
 .env
 .python-version
 poetry.lock
 .cache
+*.ipynb
+__pycache__/
+.pytest_cache/
