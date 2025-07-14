@@ -1,3 +1,5 @@
+import tomllib
+
 from crate_digger.utils.spotify import (
     get_spotify_client,
     fetch_new_releases,
@@ -5,14 +7,12 @@ from crate_digger.utils.spotify import (
 )
 
 
+with open("config.toml", "rb") as f:
+    config = tomllib.load(f)
 
 sp = get_spotify_client("playlist-modify-private,user-library-read")
 
-labels = [
-    "Mindshake Records",
-    "Solid Grooves Records",
-    "Toolroom"
-]
+labels = config["labels"]["names"]
 
 uris_to_add = []
 
@@ -28,4 +28,4 @@ for label in labels:
             uris_to_add.append(track["uri"])
 
 
-sp.playlist_add_items("spotify:playlist:4RZVqEcYVkzgExsDRnmwNp", uris_to_add)
+sp.playlist_add_items(config["playlists"]["to-listen-test"], uris_to_add)
