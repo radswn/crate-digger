@@ -1,16 +1,24 @@
 import spotipy
-from spotipy.oauth2 import SpotifyOAuth
 
+from typing import List, Dict
 from dotenv import load_dotenv
 
+from spotipy.oauth2 import SpotifyOAuth
 
-scope = "user-library-read"
-load_dotenv()
 
-auth = SpotifyOAuth(scope=scope)
-sp = spotipy.Spotify(auth_manager=auth)
 
-results = sp.current_user_saved_tracks()
-for idx, item in enumerate(results['items']):
-    track = item['track']
-    print(idx, track['artists'][0]['name'], " – ", track['name'])
+def get_spotify_client(scope: str) -> spotipy.Spotify:
+    load_dotenv()
+    auth = SpotifyOAuth(scope=scope)
+    sp = spotipy.Spotify(auth_manager=auth)
+    return sp
+
+
+def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
+    new_releases = client.search(f"label:{label} tag:new", type="album")["albums"]["items"]
+    return new_releases
+
+
+def filter_relevant_releases(releases: List[Dict]) -> List[Dict]:
+    eps_and_singles = [release for release in releases if release["album_type"].lower() in ("ep", "single")]
+    return eps_and_singles
