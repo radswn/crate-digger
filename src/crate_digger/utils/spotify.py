@@ -22,3 +22,9 @@ def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
 def filter_relevant_releases(releases: List[Dict]) -> List[Dict]:
     eps_and_singles = [release for release in releases if release["album_type"].lower() in ("ep", "single")]
     return eps_and_singles
+
+
+def get_track_uris_for_album(client: spotipy.Spotify, album_uri: str) -> List[str]:
+    album_tracks = client.album_tracks(album_uri)["items"]
+    track_uris = [track["uri"] for track in album_tracks]
+    return track_uris

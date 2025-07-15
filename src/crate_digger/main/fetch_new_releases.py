@@ -1,31 +1,22 @@
-import tomllib
-
 from crate_digger.utils.spotify import (
     get_spotify_client,
     fetch_new_releases,
-    filter_relevant_releases
+    filter_relevant_releases,
+    get_track_uris_for_album
 )
+from crate_digger.utils.config import load_config
 
 
-with open("config.toml", "rb") as f:
-    config = tomllib.load(f)
-
+config = load_config()
 sp = get_spotify_client("playlist-modify-private,user-library-read")
-
-labels = config["labels"]["names"]
 
 uris_to_add = []
 
-for label in labels:
+for label in config["labels"]["names"]:
     new_releases = fetch_new_releases(sp, label)
     relevant_releases = filter_relevant_releases(new_releases)
 
     for release in relevant_releases:
-        album_uri = release["uri"]
-        album = sp.album(album_uri)
-
-        for track in album["tracks"]["items"]:
-            uris_to_add.append(track["uri"])
-
+        uris_to_add.extend(get_track_uris_for_album(sp, release["uri"]))
 
 sp.playlist_add_items(config["playlists"]["to-listen-test"], uris_to_add)
