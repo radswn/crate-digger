@@ -1,6 +1,6 @@
 [playlists]
 to-listen = "spotify:playlist:3i2ruN3gPygSsQzcvQG9ri"
-to-listen-test = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
+test = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
 
 [labels]
 names = [

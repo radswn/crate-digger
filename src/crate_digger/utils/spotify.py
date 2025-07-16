@@ -3,15 +3,34 @@ import spotipy
 from typing import List, Dict
 from dotenv import load_dotenv
 
-from spotipy.oauth2 import SpotifyOAuth
+from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 
 
 def get_spotify_client(scope: str) -> spotipy.Spotify:
     load_dotenv()
-    auth = SpotifyOAuth(scope=scope)
+
+    cache_handler = CacheFileHandler(
+        cache_path=f".spotipy_cache/.cache-{scope}"
+    )
+    auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
     sp = spotipy.Spotify(auth_manager=auth)
     return sp
+
+
+def add_new_releases_to_playlist(client: spotipy.Spotify, record_labels: List[str], target_playlist: str):
+    uris_to_add = []
+
+    for label in record_labels:
+        new_releases = fetch_new_releases(client, label)
+        relevant_releases = filter_relevant_releases(new_releases)
+
+        for release in relevant_releases:
+            uris_to_add.extend(get_track_uris_for_album(client, release["uri"]))
+
+    snapshot_id = client.playlist_add_items(target_playlist, uris_to_add)
+
+    return uris_to_add, snapshot_id
 
 
 def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
