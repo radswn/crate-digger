@@ -2,7 +2,7 @@
 .env
 .python-version
 poetry.lock
-.cache
+.spotipy_cache/
 *.ipynb
 __pycache__/
 .pytest_cache/
