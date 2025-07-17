@@ -1,5 +1,6 @@
 from crate_digger.utils.config import load_config
 from crate_digger.utils.spotify import get_spotify_client
+from crate_digger.utils.logging import get_logger
 
 from pathlib import Path
 from dotenv import load_dotenv
@@ -7,6 +8,8 @@ from dotenv import load_dotenv
 import urllib.parse
 import os
 
+
+logger = get_logger(__name__)
 
 load_dotenv()
 config = load_config()
@@ -47,11 +50,11 @@ for scope, validation_functions in scopes_validation.items():
     sp = get_spotify_client(scope)
 
     if not get_cache_path(scope).exists():
-        print(f"Cached token for scope {scope} not found, authorize using {get_auth_url(scope)}")
+        logger.info(f"Cached token for scope {scope} not found, authorize using {get_auth_url(scope)}")
 
     for func in validation_functions:
         func(sp)
 
-    print(f"Authorized for {scope} scope")
+    logger.info(f"Authorized for {scope} scope")
 
-print("Authorized for all scopes")
+logger.info("Authorized for all scopes")

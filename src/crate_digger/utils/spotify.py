@@ -1,10 +1,13 @@
 import spotipy
+from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 from typing import List, Dict
 from dotenv import load_dotenv
 
-from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
+from crate_digger.utils.logging import get_logger
 
+
+logger = get_logger(__name__)
 
 
 def get_spotify_client(scope: str) -> spotipy.Spotify:
@@ -15,6 +18,8 @@ def get_spotify_client(scope: str) -> spotipy.Spotify:
     )
     auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
     sp = spotipy.Spotify(auth_manager=auth)
+
+    logger.info(f"Instantiated Spotipy client for scope {scope}")
     return sp
 
 
@@ -22,15 +27,28 @@ def add_new_releases_to_playlist(client: spotipy.Spotify, record_labels: List[st
     uris_to_add = []
 
     for label in record_labels:
-        new_releases = fetch_new_releases(client, label)
-        relevant_releases = filter_relevant_releases(new_releases)
+        relevant_releases = fetch_relevant_releases(client, label)
+        n_releases = len(relevant_releases)
+        logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
 
         for release in relevant_releases:
-            uris_to_add.extend(get_track_uris_for_album(client, release["uri"]))
+            release_tracks_to_add = get_track_uris_for_album(client, release["uri"])
+            n_tracks = len(release_tracks_to_add)
+            logger.info(f"Fetched {n_tracks} track{'s' if n_tracks != 1 else ''} for release {release['name']}")
+            uris_to_add.extend(release_tracks_to_add)
 
     snapshot_id = client.playlist_add_items(target_playlist, uris_to_add)
+    
+    n_added_tracks = len(uris_to_add)
+    logger.info(f"Added {n_added_tracks} new track{'s' if n_added_tracks != 1 else ''} to the playlist")
 
     return uris_to_add, snapshot_id
+
+
+def fetch_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
+    new_releases = fetch_new_releases(client, label)
+    relevant_releases = filter_relevant_releases(new_releases)
+    return relevant_releases
 
 
 def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
