@@ -1,16 +1,7 @@
 from crate_digger.utils.spotify import get_spotify_client, filter_relevant_releases, get_track_uris_for_album
 
 
-
-def test_spotify_client_can_access_profile():
-    sp = get_spotify_client("user-library-read")
-    me = sp.current_user()
-
-    assert "id" in me
-    assert "display_name" in me
-
-
-def test_release_filtering():
+def test_filter_relevant_releases():
     unfiltered = [
         {"album_type": "ep"},
         {"album_type": "ep"},

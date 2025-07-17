@@ -8,5 +8,5 @@ sp = get_spotify_client("playlist-modify-private")
 added_uris, snapshot = add_new_releases_to_playlist(
     sp,
     config["labels"]["names"],
-    config["playlists"]["test"]
+    config["spotify"]["test-playlist"]
 )

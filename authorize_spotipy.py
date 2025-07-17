@@ -9,6 +9,7 @@ import os
 
 
 load_dotenv()
+config = load_config()
 
 cache_folder = Path(".spotipy_cache")
 get_cache_path = lambda scope: cache_folder / f".cache-{scope}"
@@ -21,7 +22,8 @@ get_auth_url = lambda s: "https://accounts.spotify.com/authorize?" + \
 
 
 grasses_uri = "spotify:track:7HODJrjN4MkIRWdrTlqjiM"
-test_playlist = load_config()["playlists"]["test"]
+test_playlist = config["spotify"]["test-playlist"]
+scopes = config["spotify"]["scopes"]
 
 scopes_validation = {
     "playlist-modify-private": [
@@ -36,6 +38,7 @@ scopes_validation = {
     ]
 }
 
+assert set(scopes_validation.keys()) == set(scopes)
 
 if not cache_folder.exists():
     cache_folder.mkdir()

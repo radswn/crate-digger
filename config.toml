@@ -1,6 +1,11 @@
-[playlists]
-to-listen = "spotify:playlist:3i2ruN3gPygSsQzcvQG9ri"
-test = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
+[spotify]
+to-listen-playlist = "spotify:playlist:3i2ruN3gPygSsQzcvQG9ri"
+test-playlist = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
+scopes = [
+    "playlist-modify-private",
+    "playlist-read-private",
+    "user-library-read"
+]
 
 [labels]
 names = [
