@@ -24,6 +24,6 @@ jobs:
 
       - name: Verify AWS caller identity
         run: aws sts get-caller-identity
-      
+
       - name: List objects in test bucket
         run: aws s3 ls s3://radswn-spotify-auth-cache
