@@ -46,14 +46,22 @@ resource "aws_iam_role_policy" "s3_access" {
 
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [{
-      Effect = "Allow",
-      Action = [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:ListBucket"
-      ],
-      Resource = aws_s3_bucket.spotify_auth_cache.arn
-    }]
+    Statement = [
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:ListBucket"
+        ],
+        Resource = aws_s3_bucket.spotify_auth_cache.arn
+      },
+      {
+        Effect = "Allow",
+        Action = [
+          "s3:GetObject",
+          "s3:PutObject",
+        ],
+        Resource = "${aws_s3_bucket.spotify_auth_cache.arn}/*"
+      }
+    ]
   })
 }
