@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   test-oidc:
+    environment: gh-actions
     runs-on: ubuntu-latest
 
     steps:
