@@ -32,13 +32,15 @@ def add_new_releases_to_playlist(client: spotipy.Spotify, record_labels: List[st
         logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
 
         for release in relevant_releases:
-            release_tracks_to_add = get_track_uris_for_album(client, release["uri"])
-            n_tracks = len(release_tracks_to_add)
+            released_tracks = get_album_tracks(client, release["uri"])
+            original_tracks_to_add = remove_extended_versions(released_tracks)
+
+            n_tracks = len(original_tracks_to_add)
             logger.info(f"Fetched {n_tracks} track{'s' if n_tracks != 1 else ''} for release {release['name']}")
-            uris_to_add.extend(release_tracks_to_add)
+            uris_to_add.extend(get_uris(original_tracks_to_add))
 
     snapshot_id = client.playlist_add_items(target_playlist, uris_to_add)
-    
+
     n_added_tracks = len(uris_to_add)
     logger.info(f"Added {n_added_tracks} new track{'s' if n_added_tracks != 1 else ''} to the playlist")
 
@@ -52,7 +54,7 @@ def fetch_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
 
 
 def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
-    new_releases = client.search(f"label:{label} tag:new", type="album")["albums"]["items"]
+    new_releases = client.search(f"label:{label} tag:new", type="album")["albums"]["items"] # TODO paging
     return new_releases
 
 
@@ -61,7 +63,24 @@ def filter_relevant_releases(releases: List[Dict]) -> List[Dict]:
     return eps_and_singles
 
 
-def get_track_uris_for_album(client: spotipy.Spotify, album_uri: str) -> List[str]:
-    album_tracks = client.album_tracks(album_uri)["items"]
-    track_uris = [track["uri"] for track in album_tracks]
+def get_album_tracks(client: spotipy.Spotify, album_uri: str) -> List[Dict]:
+    return client.album_tracks(album_uri)["items"]
+
+
+def get_uris(tracks: List[Dict]) -> List[str]:
+    track_uris = [track["uri"] for track in tracks]
     return track_uris
+
+
+def remove_extended_versions(tracks: List[Dict]) -> List[Dict]:
+    sorted_tracks = sorted(tracks, key=lambda t: t["name"])
+
+    unique_tracks = []
+    unique_track_titles = set()
+
+    for track in sorted_tracks:
+        if not ("Extended" in track["name"] and any(t in track["name"] for t in unique_track_titles)):
+            unique_track_titles.add(track["name"])
+            unique_tracks.append(track)
+
+    return unique_tracks
