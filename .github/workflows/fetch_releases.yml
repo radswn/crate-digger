@@ -1,6 +1,8 @@
 name: Fetch New Releases
 
 on:
+  schedule:
+    - cron: '0 6 * * *'
   workflow_dispatch:
 
 permissions:
@@ -21,6 +23,20 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
           aws-region: eu-west-1
+
+      - name: Check run schedule
+        run: |
+          aws s3 cp s3://radswn-spotify-auth-cache/next_run.txt next_run.txt
+
+          next_run=$(cat next_run.txt)
+          today=$(date -u +"%Y-%m-%d")
+
+          if [[ "$today" < "$next_run" ]]; then
+              echo "Not scheduled to run today. Next run is on $next_run."
+              exit 0
+          fi
+
+          echo "Running task."
 
       - name: Set up Python
         id: setup-python
@@ -59,3 +75,10 @@ jobs:
 
       - name: Upload refreshed tokens back to S3
         run: aws s3 cp .spotipy_cache s3://radswn-spotify-auth-cache/.spotipy_cache --recursive
+
+      - name: Update run schedule
+        run: |
+          new_run=$(date -u -d "$today + 14 days" +"%Y-%m-%d")
+          echo "$new_run" > next_run.txt
+          aws s3 cp next_run.txt s3://radswn-spotify-auth-cache/next_run.txt
+
