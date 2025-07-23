@@ -1,7 +1,7 @@
 import os
 import requests
 
-from typing import Dict
+from typing import Dict, List
 
 from crate_digger.utils.markdownv2 import bold, underline
 from crate_digger.utils.logging import get_logger
@@ -25,7 +25,7 @@ def send_message(message: str) -> None:
         logger.error(f"Failed to send Telegram message: {e}")
 
 
-def construct_message(releases_info: Dict[str, Dict]) -> str:
+def construct_message(releases_info: Dict[str, Dict[str, List[Dict]]]) -> str:
     message_text = bold("NEW RELEASES") + "\n"
 
     for label, release_titles in releases_info.items():
@@ -46,6 +46,6 @@ def construct_message(releases_info: Dict[str, Dict]) -> str:
     return message_text
 
 
-def escape_markdown_v2(text):
+def escape_markdown_v2(text: str) -> str:
     to_escape = r"_*[]()~`>#+-=|{}.!"
     return ''.join(f"\\{c}" if c in to_escape else c for c in text)

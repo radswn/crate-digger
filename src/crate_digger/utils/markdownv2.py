@@ -1,6 +1,3 @@
-from typing import List, Dict
-
-
 def bold(text: str) -> str:
     return f"*{text}*"
 
