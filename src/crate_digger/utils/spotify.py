@@ -25,26 +25,36 @@ def get_spotify_client(scope: str) -> spotipy.Spotify:
 
 def add_new_releases_to_playlist(client: spotipy.Spotify, record_labels: List[str], target_playlist: str):
     uris_to_add = []
+    track_info_to_send = {}
 
     for label in record_labels:
         relevant_releases = fetch_relevant_releases(client, label)
         n_releases = len(relevant_releases)
         logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
 
+        if n_releases:
+            track_info_to_send[label] = {}
+
         for release in relevant_releases:
             released_tracks = get_album_tracks(client, release["uri"])
-            original_tracks_to_add = remove_extended_versions(released_tracks)
+            tracks_to_add = remove_extended_versions(released_tracks)
 
-            n_tracks = len(original_tracks_to_add)
+            n_tracks = len(tracks_to_add)
             logger.info(f"Fetched {n_tracks} track{'s' if n_tracks != 1 else ''} for release {release['name']}")
-            uris_to_add.extend(get_uris(original_tracks_to_add))
+
+            added_tracks_uris = get_uris(tracks_to_add)
+            uris_to_add.extend(added_tracks_uris)
+
+            for track in released_tracks:
+                track["is_added"] = track["uri"] in set(added_tracks_uris)
+            track_info_to_send[label][release["name"]] = released_tracks
 
     snapshot_id = client.playlist_add_items(target_playlist, uris_to_add)
 
     n_added_tracks = len(uris_to_add)
     logger.info(f"Added {n_added_tracks} new track{'s' if n_added_tracks != 1 else ''} to the playlist")
 
-    return uris_to_add, snapshot_id
+    return track_info_to_send, snapshot_id
 
 
 def fetch_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
