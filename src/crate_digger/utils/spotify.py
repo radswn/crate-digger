@@ -1,3 +1,5 @@
+import re
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
@@ -83,16 +85,24 @@ def get_uris(tracks: List[Dict]) -> List[str]:
 
 
 def remove_extended_versions(tracks: List[Dict]) -> List[Dict]:
-    sorted_tracks = sorted(tracks, key=lambda t: t["name"])
+    sorted_tracks = sorted(tracks, key=lambda t: len(t["name"]))
 
     unique_tracks = []
-    unique_track_titles = set()
+    unique_lowercase_titles = set()
 
     for track in sorted_tracks:
-        if not ("Extended" in track["name"] and any(t in track["name"] for t in unique_track_titles)):
-            unique_track_titles.add(track["name"])
-            unique_tracks.append(track)
+        title = track["name"]
+        normalized_title = " ".join(re.sub(r"[^\w\s]", "", title.lower()).split())
+
+        is_extended = "extended" in normalized_title
+
+        original_title = normalized_title.replace(" extended mix", "").replace(" extended", "")
+        is_original_available = original_title in unique_lowercase_titles
+
+        if (is_extended and not is_original_available) or (not is_extended):
+            unique_lowercase_titles.add(original_title)
             track["is_added"] = True
+            unique_tracks.append(track)
 
     n_dropped_tracks = len(tracks) - len(unique_tracks)
 

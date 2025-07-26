@@ -38,12 +38,20 @@ def test_get_track_uris_for_album():
 
 def test_remove_extended_versions():
     test_tracks = [
-        {"name": "Tzu Mani - Extended Mix"},
-        {"name": "Tzu Mani"},
-        {"name": "Tzu Mani - Paco Osuna & Fer BR Remix"},
+        {"name": "Song"},
+        {"name": "Song - Radio Mix"},
+        {"name": "Song - Nice Remix"},
+        {"name": "Song Two - Extended Mix"},
+        
+        {"name": "Song - Extended Mix"},
+        {"name": "Song (Extended Mix)"},
+        {"name": "Song - Nice Extended Remix"},
     ]
 
-    deduped_tracks = remove_extended_versions(test_tracks)
+    filtered_tracks = set([t["name"] for t in remove_extended_versions(test_tracks)])
 
-    assert len(deduped_tracks) == 2
-    assert {"name": "Tzu Mani - Extended Mix"} not in deduped_tracks
+    assert len(filtered_tracks) == 4
+    assert "Song" in filtered_tracks
+    assert "Song - Radio Mix" in filtered_tracks
+    assert "Song - Nice Remix" in filtered_tracks
+    assert "Song Two - Extended Mix" in filtered_tracks
