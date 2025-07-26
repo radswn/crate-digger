@@ -22,11 +22,14 @@ def test_filter_relevant_releases():
 
 
 def test_get_track_uris_for_album():
-    berk_uri = "spotify:album:6HuxRAq6IqA1iBHNt1MsLD"
+    berk = {
+        "name": "Berk",
+        "uri": "spotify:album:6HuxRAq6IqA1iBHNt1MsLD"
+    }
     grasses_uri = "spotify:track:7HODJrjN4MkIRWdrTlqjiM"
 
     sp = get_spotify_client("user-library-read")
-    album_tracks = get_album_tracks(sp, berk_uri)
+    album_tracks = get_album_tracks(sp, berk)
     track_uris = get_uris(album_tracks)
 
     assert len(track_uris) == 10
