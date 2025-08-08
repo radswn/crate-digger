@@ -4,7 +4,7 @@ test-playlist = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
 scopes = [
     "playlist-modify-private",
     "playlist-read-private",
-    "user-library-read"
+    "user-library-read",
 ]
 
 [labels]
@@ -15,4 +15,6 @@ names = [
     "Repopulate Mars",
     "Three Six Zero Recordings",
     "Defected Records",
+    "Nervous Records",
+    "Heavy House Society",
 ]
