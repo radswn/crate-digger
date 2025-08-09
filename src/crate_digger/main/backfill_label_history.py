@@ -12,7 +12,7 @@ if len(sys.argv) < 2:
     print("Usage: python backfill_label_history.py '<label name>'")
     sys.exit(1)
 
-label = sys.argv[1]
+label = " ".join(sys.argv[1:])
 
 sp = get_spotify_client("playlist-modify-private")
 
