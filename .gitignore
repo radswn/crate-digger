@@ -1,8 +1,11 @@
+.vscode/
+
 .venv/
 .env
 .python-version
 poetry.lock
 
+notebooks/
 *.ipynb
 
 .spotipy_cache/
