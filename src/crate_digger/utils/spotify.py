@@ -1,6 +1,10 @@
 import re
 
 import spotipy
+
+import pandas as pd
+
+from datetime import date
 from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 from typing import List, Dict
@@ -119,3 +123,92 @@ def add_to_playlist(client: spotipy.Spotify, playlist_id: str, track_uris: List[
     logger.info(f"Added {n_added_tracks} new track{'s' if n_added_tracks != 1 else ''} to the playlist")
 
     return snapshot_id
+
+
+def get_all_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
+    releases = []
+
+    for year in range(1990, date.today().year + 1):
+        len_beginning = len(releases)
+
+        offset = 0
+        page_size = 50
+
+        page_of_found_releases = client.search(f"label:{label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
+
+        while page_of_found_releases:
+            releases.extend(page_of_found_releases)
+            offset += page_size
+
+            if offset + page_size > 1000: break
+
+            page_of_found_releases = client.search(f"label:{label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
+
+        len_end = len(releases)
+        if len_end != len_beginning:
+            logger.info(f"Fetched {len_end - len_beginning} releases for year {year}")
+
+    logger.info(f"Fetched {len(releases)} releases in total")
+
+    return releases
+
+
+def parse_releases(releases: List[Dict]) -> pd.DataFrame:
+    release_df = pd.DataFrame(releases)
+
+    size_beginning = release_df.shape[0]
+
+    release_df = release_df.drop(["artists", "images", "available_markets", "external_urls"], axis=1)
+    release_df = release_df[release_df.album_type == "single"]
+    
+    size_singles = release_df.shape[0]
+    logger.info(f"Dropped {size_beginning - size_singles} non-single releases")
+
+    release_df = release_df.drop_duplicates(["uri"])
+    
+    size_unique = release_df.shape[0]
+    logger.info(f"Dropped {size_singles - size_unique} duplicates")
+    
+    release_df = release_df.sort_values("release_date")
+    logger.info(f"{release_df.shape[0]} releases left")
+
+    return release_df
+
+
+def get_all_release_uris(client: spotipy.Spotify, label: str) -> pd.Series:
+    all_releases = get_all_releases(client, label)
+    parsed_df = parse_releases(all_releases)
+    release_uris = parsed_df.uri
+    return release_uris
+
+
+def collect_tracks_from_albums(client: spotipy.Spotify, album_uris: pd.Series) -> List[str]:
+    total_dropped = 0
+    all_track_uris = []
+    batch_size = 20
+
+    for i in range(0, len(album_uris), batch_size):
+        uris_batch = album_uris[i:i+batch_size]
+        album_batch = client.albums(uris_batch)["albums"]
+
+        for album in album_batch:
+            album_tracks = album["tracks"]["items"]
+            unique_track_uris = [t["uri"] for t in album_tracks if "extended" not in t["name"].lower()]
+            total_dropped += len(album_tracks) - len(unique_track_uris)
+            all_track_uris.extend(unique_track_uris)
+
+    logger.info(f"{len(all_track_uris)} tracks found")
+    logger.info(f"{total_dropped} tracks dropped")
+
+    return all_track_uris
+
+
+def create_playlists(client: spotipy.Spotify, playlist_name: str, track_uris: List[str], step_size:int=50) -> None:
+    for i in range(0, len(track_uris), step_size):
+        full_playlist_name = f"{playlist_name} {(i // step_size) + 1}"
+
+        playlist = client.user_playlist_create(client.me()["id"], full_playlist_name, public=False)
+        logger.info(f"Created playlist {full_playlist_name}")
+
+        client.playlist_add_items(playlist["uri"], track_uris[i:i+step_size])
+
