@@ -210,8 +210,16 @@ def collect_tracks_from_albums(client: spotipy.Spotify, album_uris: pd.Series) -
 def create_playlists(client: spotipy.Spotify, playlist_name: str, track_uris: List[str], step_size:int=50) -> None:
     for i in range(0, len(track_uris), step_size):
         full_playlist_name = f"{playlist_name} {(i // step_size) + 1}"
+        first_track_release_date = get_track_release_date(track_uris[i])
+        last_track_release_date = get_track_release_date(track_uris[min(i + step_size, len(track_uris)) - 1])
 
-        playlist = client.user_playlist_create(client.me()["id"], full_playlist_name, public=False)
+        playlist_description = first_track_release_date + " - " + last_track_release_date
+
+        playlist = client.user_playlist_create(client.me()["id"], full_playlist_name, public=False, description=playlist_description)
         logger.info(f"Created playlist {full_playlist_name} - {playlist['external_urls']['spotify']}")
 
         client.playlist_add_items(playlist["uri"], track_uris[i:i+step_size])
+
+
+def get_track_release_date(client: spotipy.Spotify, track_uri: str) -> str:
+    return client.track(track_uri)["album"]["release_date"]
