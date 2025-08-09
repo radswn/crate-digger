@@ -5,10 +5,11 @@ import spotipy
 import pandas as pd
 
 from datetime import date
-from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
-
+from pathlib import Path
 from typing import List, Dict
 from dotenv import load_dotenv
+
+from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 from crate_digger.utils.logging import get_logger
 
@@ -19,9 +20,10 @@ logger = get_logger(__name__)
 def get_spotify_client(scope: str) -> spotipy.Spotify:
     load_dotenv()
 
-    cache_handler = CacheFileHandler(
-        cache_path=f".spotipy_cache/.cache-{scope}"
-    )
+    project_root = Path(__file__).resolve().parents[3]
+    cache_path = project_root / ".spotipy_cache" / f".cache-{scope}"
+
+    cache_handler = CacheFileHandler(cache_path=cache_path)
     auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
     sp = spotipy.Spotify(auth_manager=auth)
 
