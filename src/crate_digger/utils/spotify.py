@@ -146,7 +146,7 @@ def get_all_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
 
         len_end = len(releases)
         if len_end != len_beginning:
-            logger.info(f"Fetched {len_end - len_beginning} releases for year {year}")
+            logger.info(f"Fetched {len_end - len_beginning} release{'s' if len_end - len_beginning != 1 else ''} for year {year}")
 
     logger.info(f"Fetched {len(releases)} releases in total")
 
@@ -160,17 +160,19 @@ def parse_releases(releases: List[Dict]) -> pd.DataFrame:
 
     release_df = release_df.drop(["artists", "images", "available_markets", "external_urls"], axis=1)
     release_df = release_df[release_df.album_type == "single"]
-    
+
     size_singles = release_df.shape[0]
-    logger.info(f"Dropped {size_beginning - size_singles} non-single releases")
+    n_dropped_non_singles = size_beginning - size_singles
+    logger.info(f"Dropped {n_dropped_non_singles} non-single release{'s' if n_dropped_non_singles != 1 else ''}")
 
     release_df = release_df.drop_duplicates(["uri"])
-    
+
     size_unique = release_df.shape[0]
-    logger.info(f"Dropped {size_singles - size_unique} duplicates")
-    
+    n_duplicates_dropped = size_singles - size_unique
+    logger.info(f"Dropped {n_duplicates_dropped} duplicate{'s' if n_duplicates_dropped != 1 else ''}")
+
     release_df = release_df.sort_values("release_date")
-    logger.info(f"{release_df.shape[0]} releases left")
+    logger.info(f"{release_df.shape[0]} release{'s' if release_df.shape[0] != 1 else ''} left")
 
     return release_df
 
@@ -197,8 +199,8 @@ def collect_tracks_from_albums(client: spotipy.Spotify, album_uris: pd.Series) -
             total_dropped += len(album_tracks) - len(unique_track_uris)
             all_track_uris.extend(unique_track_uris)
 
-    logger.info(f"{len(all_track_uris)} tracks found")
-    logger.info(f"{total_dropped} tracks dropped")
+    logger.info(f"{len(all_track_uris)} track{'s' if len(all_track_uris) != 1 else ''} found")
+    logger.info(f"{total_dropped} track{'s' if total_dropped != 1 else ''} dropped")
 
     return all_track_uris
 
@@ -208,7 +210,6 @@ def create_playlists(client: spotipy.Spotify, playlist_name: str, track_uris: Li
         full_playlist_name = f"{playlist_name} {(i // step_size) + 1}"
 
         playlist = client.user_playlist_create(client.me()["id"], full_playlist_name, public=False)
-        logger.info(f"Created playlist {full_playlist_name}")
+        logger.info(f"Created playlist {full_playlist_name} - {playlist['external_urls']['spotify']}")
 
         client.playlist_add_items(playlist["uri"], track_uris[i:i+step_size])
-
