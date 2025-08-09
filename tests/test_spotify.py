@@ -1,24 +1,23 @@
 from crate_digger.utils.spotify import (
     get_spotify_client,
-    filter_relevant_releases,
+    filter_to_singles,
     get_album_tracks,
     get_uris,
     remove_extended_versions
 )
 
 
-def test_filter_relevant_releases():
+def test_filter_to_singles():
     unfiltered = [
-        {"album_type": "ep"},
-        {"album_type": "ep"},
+        {"album_type": "album"},
         {"album_type": "compilation"},
         {"album_type": "single"},
     ]
 
-    filtered = filter_relevant_releases(unfiltered)
+    filtered = filter_to_singles(unfiltered)
 
-    assert len(filtered) == 3
-    assert {"album_type": "compilation"} not in filtered
+    assert len(filtered) == 1
+    assert filtered[0] == {"album_type": "single"}
 
 
 def test_get_track_uris_for_album():
@@ -42,7 +41,7 @@ def test_remove_extended_versions():
         {"name": "Song - Radio Mix"},
         {"name": "Song - Nice Remix"},
         {"name": "Song Two - Extended Mix"},
-        
+
         {"name": "Song - Extended Mix"},
         {"name": "Song (Extended Mix)"},
         {"name": "Song - Nice Extended Remix"},

@@ -30,7 +30,7 @@ def fetch_and_add(client: spotipy.Spotify, record_labels: List[str], target_play
     track_info_to_send = {}
 
     for label in record_labels:
-        relevant_releases = fetch_relevant_releases(client, label)
+        relevant_releases = fetch_new_relevant_releases(client, label)
 
         if relevant_releases:
             track_info_to_send[label] = {}
@@ -47,9 +47,9 @@ def fetch_and_add(client: spotipy.Spotify, record_labels: List[str], target_play
     return track_info_to_send
 
 
-def fetch_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
+def fetch_new_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
     new_releases = fetch_new_releases(client, label)
-    relevant_releases = filter_relevant_releases(new_releases)
+    relevant_releases = filter_to_singles(new_releases)
 
     n_releases = len(relevant_releases)
     logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
@@ -62,9 +62,9 @@ def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
     return new_releases
 
 
-def filter_relevant_releases(releases: List[Dict]) -> List[Dict]:
-    eps_and_singles = [release for release in releases if release["album_type"].lower() in ("ep", "single")]
-    return eps_and_singles
+def filter_to_singles(releases: List[Dict]) -> List[Dict]:
+    singles = [r for r in releases if r["album_type"] == "single"]
+    return singles
 
 
 def get_album_tracks(client: spotipy.Spotify, album: Dict) -> List[Dict]:
