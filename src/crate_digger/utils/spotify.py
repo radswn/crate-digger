@@ -65,7 +65,7 @@ def fetch_new_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dic
 
 
 def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
-    new_releases = client.search(f"label:{label} tag:new", limit=50, type="album")["albums"]["items"]
+    new_releases = client.search(f"label:{label.replace('\'', '')} tag:new", limit=50, type="album")["albums"]["items"]
     return new_releases
 
 
@@ -141,6 +141,7 @@ def add_to_playlist(client: spotipy.Spotify, playlist_id: str, track_uris: List[
 
 def get_all_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
     releases = []
+    search_normalized_label = label.replace('\'', '')
 
     for year in range(1990, date.today().year + 1):
         len_beginning = len(releases)
@@ -148,7 +149,7 @@ def get_all_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
         offset = 0
         page_size = 50
 
-        page_of_found_releases = client.search(f"label:{label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
+        page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
 
         while page_of_found_releases:
             releases.extend(page_of_found_releases)
@@ -156,7 +157,7 @@ def get_all_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
 
             if offset + page_size > 1000: break
 
-            page_of_found_releases = client.search(f"label:{label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
+            page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
 
         len_end = len(releases)
         if len_end != len_beginning:
