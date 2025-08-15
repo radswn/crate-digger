@@ -18,6 +18,6 @@ sp = get_spotify_client("playlist-modify-private")
 
 release_uris = get_all_release_uris(sp, label)
 
-uris_to_add = collect_tracks_from_albums(sp, release_uris)
+uris_to_add = collect_tracks_from_albums(sp, release_uris, label)
 
 create_playlists(sp, label, uris_to_add)

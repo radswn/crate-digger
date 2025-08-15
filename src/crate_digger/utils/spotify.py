@@ -55,7 +55,8 @@ def fetch_and_add(client: spotipy.Spotify, record_labels: List[str], target_play
 
 def fetch_new_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
     new_releases = fetch_new_releases(client, label)
-    relevant_releases = filter_to_singles(new_releases)
+    exact_label_releases = filter_exact_label_releases(client, new_releases, label)
+    relevant_releases = filter_to_singles(exact_label_releases)
 
     n_releases = len(relevant_releases)
     logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
@@ -64,8 +65,19 @@ def fetch_new_relevant_releases(client: spotipy.Spotify, label: str) -> List[Dic
 
 
 def fetch_new_releases(client: spotipy.Spotify, label: str) -> List[Dict]:
-    new_releases = client.search(f"label:{label} tag:new", type="album")["albums"]["items"]
+    new_releases = client.search(f"label:{label} tag:new", limit=50, type="album")["albums"]["items"]
     return new_releases
+
+
+def filter_exact_label_releases(client: spotipy.Spotify, releases: List[Dict], label: str) -> List[Dict]:
+    release_uris = [r["uri"] for r in releases]
+    releases_with_correct_label = []
+
+    for i in range(0, len(release_uris), 20):
+        full_albums = client.albums(release_uris[i:i+20])["albums"]
+        releases_with_correct_label.extend([a for a in full_albums if a["label"] == label])
+
+    return releases_with_correct_label
 
 
 def filter_to_singles(releases: List[Dict]) -> List[Dict]:
@@ -186,14 +198,14 @@ def get_all_release_uris(client: spotipy.Spotify, label: str) -> pd.Series:
     return release_uris
 
 
-def collect_tracks_from_albums(client: spotipy.Spotify, album_uris: pd.Series) -> List[str]:
+def collect_tracks_from_albums(client: spotipy.Spotify, album_uris: pd.Series, label: str) -> List[str]:
     total_dropped = 0
     all_track_uris = []
     batch_size = 20
 
     for i in range(0, len(album_uris), batch_size):
         uris_batch = album_uris[i:i+batch_size]
-        album_batch = client.albums(uris_batch)["albums"]
+        album_batch = [a for a in client.albums(uris_batch)["albums"] if a["label"] == label]
 
         for album in album_batch:
             album_tracks = album["tracks"]["items"]
