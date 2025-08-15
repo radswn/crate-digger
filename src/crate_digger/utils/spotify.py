@@ -4,7 +4,7 @@ import spotipy
 
 import pandas as pd
 
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import List, Dict
 from dotenv import load_dotenv
@@ -49,6 +49,7 @@ def fetch_and_add(client: spotipy.Spotify, record_labels: List[str], target_play
             track_info_to_send[label][release["name"]] = released_tracks
 
     add_to_playlist(client, target_playlist, uris_to_add)
+    client.playlist_change_details(target_playlist, description=f"next update: {date.today() + timedelta(days=14)}")
 
     return track_info_to_send
 
