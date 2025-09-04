@@ -5,21 +5,18 @@ def test_construct_message():
     expected_message =  \
 r"""❗*NEW RELEASES*❗
 
-🎵 FOUND *4* TRACKS 🎵
+🎵 FOUND *5* TRACKS 🎵
 
 
 🎤 GOOD LABEL
 
 💿 Nice Single
-__1\. Someone, Someone Else \- Song__
-2\. Someone, Someone Else \- Song \- Extended Mix
+💿 Amazing EP
 
 
 🎤 COOL LABEL
 
 💿 Warm EP
-__1\. Somebody \- Warm__
-__2\. Somebody, DJ Person \- Warm \- DJ Person Remix__
 """
 
     notification_content = {
@@ -40,6 +37,15 @@ __2\. Somebody, DJ Person \- Warm \- DJ Person Remix__
                     ],
                     "name": "Song - Extended Mix",
                     "is_added": False
+                }
+            ],
+            "Amazing EP": [
+                {
+                    "artists": [
+                        {"name": "Someone As Well"}
+                    ],
+                    "name": "Song As Well",
+                    "is_added": True
                 }
             ]
         },

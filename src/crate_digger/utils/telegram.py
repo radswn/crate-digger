@@ -32,19 +32,10 @@ def construct_message(releases_info: Dict[str, Dict[str, List[Dict]]]) -> str:
     message_text += "🎵 FOUND " + bold(str(n_tracks_found)) + " TRACKS 🎵" + "\n"
 
     for label, release_titles in releases_info.items():
-        message_text += "\n\n" + "🎤 " + escape_markdown_v2(label).upper() + "\n"
+        message_text += "\n\n" + "🎤 " + escape_markdown_v2(label).upper() + "\n\n"
 
-        for release, tracks in release_titles.items():
-            message_text += "\n" + "💿 " +  escape_markdown_v2(release) + "\n"
-
-            for i, track in enumerate(tracks):
-                joined_artists = ", ".join([artist["name"] for artist in track["artists"]])
-                title = track["name"]
-
-                track_line = escape_markdown_v2(f"{i + 1}. {joined_artists} - {title}")
-                if track["is_added"]:
-                    track_line = underline(track_line)
-                message_text += track_line + "\n"
+        for release in release_titles.keys():
+            message_text += "💿 " +  escape_markdown_v2(release) + "\n"
 
     return message_text
 
