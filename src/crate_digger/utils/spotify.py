@@ -222,7 +222,7 @@ def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: st
 
 def create_playlists(client: Spotify, playlist_name: str, track_uris: List[str], step_size:int=50) -> None:
     for i in range(0, len(track_uris), step_size):
-        full_playlist_name = f"{playlist_name} {(i // step_size) + 1}"
+        full_playlist_name = f"{playlist_name} {(i // step_size) + 1:03d}"
         first_track_release_date = get_track_release_date(client, track_uris[i])
         last_track_release_date = get_track_release_date(client, track_uris[min(i + step_size, len(track_uris)) - 1])
 
