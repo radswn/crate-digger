@@ -14,7 +14,4 @@ track_info_to_send = fetch_and_add(
 
 if track_info_to_send:
     message = construct_message(track_info_to_send)
-else:
-    message = "No new tracks found, come back in 2 weeks :("
-
-send_message(message)
+    send_message(message)

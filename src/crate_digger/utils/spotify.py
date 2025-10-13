@@ -47,15 +47,16 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
             uris_to_add.extend(get_uris(tracks_to_add))
             track_info_to_send[label][release["name"]] = released_tracks
 
-    add_to_playlist(client, target_playlist, uris_to_add)
-    client.playlist_change_details(target_playlist, description=f"next update: {date.today() + timedelta(days=14)}")
+    if track_info_to_send:
+        add_to_playlist(client, target_playlist, uris_to_add)
 
     return track_info_to_send
 
 
 def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
     new_releases = fetch_new_releases(client, label)
-    exact_label_releases = filter_exact_label_releases(client, new_releases, label)
+    yesterdays_releases = filter_yesterdays_releases(new_releases)
+    exact_label_releases = filter_exact_label_releases(client, yesterdays_releases, label)
     relevant_releases = filter_to_singles(exact_label_releases)
 
     n_releases = len(relevant_releases)
@@ -67,6 +68,11 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
 def fetch_new_releases(client: Spotify, label: str) -> List[Dict]:
     new_releases = client.search(f"label:{label.replace('\'', '')} tag:new", limit=50, type="album")["albums"]["items"]
     return new_releases
+
+
+def filter_yesterdays_releases(releases: List[Dict]) -> List[Dict]:
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    return [r for r in releases if r["release_date"] == yesterday]
 
 
 def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: str) -> List[Dict]:

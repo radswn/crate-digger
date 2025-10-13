@@ -10,44 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  check-schedule:
-    name: Check Run Schedule
-    runs-on: ubuntu-latest
-    environment: gh-actions
-    outputs:
-      run: ${{ steps.check.outputs.run }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials using OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
-          aws-region: eu-west-1
-
-      - name: Check if run is scheduled
-        id: check
-        run: |
-          aws s3 cp s3://radswn-spotify-auth-cache/next_run.txt next_run.txt
-          next_run=$(cat next_run.txt)
-          today=$(date -u +"%Y-%m-%d")
-
-          echo "Next run scheduled for: $next_run"
-          if [[ "$today" == "$next_run" ]]; then
-              echo "Scheduled to run today."
-              echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-              echo "Not scheduled to run today."
-              echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-
-
   fetch-releases:
     name: Fetch New Releases
-    needs: check-schedule
-    if: needs.check-schedule.outputs.run == 'true'
     runs-on: ubuntu-latest
     environment: gh-actions
 
@@ -100,28 +64,3 @@ jobs:
 
       - name: Upload refreshed tokens back to S3
         run: aws s3 cp .spotipy_cache s3://radswn-spotify-auth-cache/.spotipy_cache --recursive
-
-
-  update-schedule:
-    name: Update Schedule
-    needs: check-schedule
-    if: needs.check-schedule.outputs.run == 'true'
-    runs-on: ubuntu-latest
-    environment: gh-actions
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials using OIDC
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_OIDC_ROLE }}
-          aws-region: eu-west-1
-
-      - name: Calculate and upload next run date
-        run: |
-          today=$(date -u +"%Y-%m-%d")
-          next_run=$(date -u -d "$today + 14 days" +"%Y-%m-%d")
-          echo "$next_run" > next_run.txt
-          aws s3 cp next_run.txt s3://radswn-spotify-auth-cache/next_run.txt
