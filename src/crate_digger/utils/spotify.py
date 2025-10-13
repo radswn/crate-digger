@@ -47,7 +47,8 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
             uris_to_add.extend(get_uris(tracks_to_add))
             track_info_to_send[label][release["name"]] = released_tracks
 
-    add_to_playlist(client, target_playlist, uris_to_add)
+    if track_info_to_send:
+        add_to_playlist(client, target_playlist, uris_to_add)
 
     return track_info_to_send
 
