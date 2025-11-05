@@ -56,8 +56,7 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
 def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
     new_releases = fetch_new_releases(client, label)
     yesterdays_releases = filter_yesterdays_releases(new_releases)
-    exact_label_releases = filter_exact_label_releases(client, yesterdays_releases, label)
-    relevant_releases = filter_to_singles(exact_label_releases)
+    relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
 
     n_releases = len(relevant_releases)
     logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
@@ -84,11 +83,6 @@ def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: st
         releases_with_correct_label.extend([a for a in full_albums if a["label"] == label])
 
     return releases_with_correct_label
-
-
-def filter_to_singles(releases: List[Dict]) -> List[Dict]:
-    singles = [r for r in releases if r["album_type"] == "single"]
-    return singles
 
 
 def get_album_tracks(client: Spotify, album: Dict) -> List[Dict]:
@@ -180,16 +174,11 @@ def parse_releases(releases: List[Dict]) -> pd.DataFrame:
     size_beginning = release_df.shape[0]
 
     release_df = release_df.drop(["artists", "images", "available_markets", "external_urls"], axis=1)
-    release_df = release_df[release_df.album_type == "single"]
-
-    size_singles = release_df.shape[0]
-    n_dropped_non_singles = size_beginning - size_singles
-    logger.info(f"Dropped {n_dropped_non_singles} non-single release{'s' if n_dropped_non_singles != 1 else ''}")
 
     release_df = release_df.drop_duplicates(["uri"])
 
     size_unique = release_df.shape[0]
-    n_duplicates_dropped = size_singles - size_unique
+    n_duplicates_dropped = size_beginning - size_unique
     logger.info(f"Dropped {n_duplicates_dropped} duplicate{'s' if n_duplicates_dropped != 1 else ''}")
 
     release_df = release_df.sort_values("release_date")
