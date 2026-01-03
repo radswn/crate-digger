@@ -36,7 +36,7 @@ src/crate_digger/
 ## Prerequisites
 
 - Python 3.12+
-- Poetry (or pip)
+- [uv](https://github.com/astral-sh/uv)
 - Spotify Developer account
 - Telegram Bot token
 - (Optional) AWS S3 + Terraform for CI/CD deployment
@@ -48,7 +48,7 @@ src/crate_digger/
 ```bash
 git clone https://github.com/yourusername/crate-digger.git
 cd crate-digger
-poetry install
+uv sync
 ```
 
 ### 2. Configure
@@ -102,10 +102,10 @@ TELEGRAM_CHAT_ID=your_chat_id
 
 ```bash
 # Fetch new releases and add to playlist (sends Telegram notification)
-poetry run python -m crate_digger.main.fetch_new_releases
+uv run python -m crate_digger.main.fetch_new_releases
 
 # Backfill label history into playlists
-poetry run python -m crate_digger.main.backfill_label_history "Hot Creations"
+uv run python -m crate_digger.main.backfill_label_history "Hot Creations"
 ```
 
 ## Usage
@@ -113,7 +113,7 @@ poetry run python -m crate_digger.main.backfill_label_history "Hot Creations"
 ### Daily Sync
 
 ```bash
-poetry run python -m crate_digger.main.fetch_new_releases
+uv run python -m crate_digger.main.fetch_new_releases
 ```
 
 - Fetches releases from all configured labels for yesterday
@@ -124,7 +124,7 @@ poetry run python -m crate_digger.main.fetch_new_releases
 ### Backfill History
 
 ```bash
-poetry run python -m crate_digger.main.backfill_label_history "Label Name"
+uv run python -m crate_digger.main.backfill_label_history "Label Name"
 ```
 
 - Collects all releases by label since 1990
@@ -134,13 +134,13 @@ poetry run python -m crate_digger.main.backfill_label_history "Label Name"
 
 ```bash
 # Run all tests
-poetry run pytest
+uv run pytest
 
 # Run with coverage
-poetry run pytest --cov=crate_digger
+uv run pytest --cov=crate_digger
 
 # Run specific test file
-poetry run pytest tests/test_spotify.py
+uv run pytest tests/test_spotify.py
 ```
 
 **Test coverage includes:**
@@ -191,10 +191,10 @@ The repository is configured to run daily via GitHub Actions:
 
 ```bash
 # Run full test suite
-poetry run pytest --cov
+uv run pytest --cov
 
 # Type checking (optional, requires mypy/pyright)
-poetry run mypy src/ #TODO
+uv run mypy src/
 ```
 
 ## Troubleshooting

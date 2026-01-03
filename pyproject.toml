@@ -1,27 +1,19 @@
 [project]
 name = "crate-digger"
-version = "0.1.0"
+version = "1.0.0"
 description = ""
-authors = [
-    {name = "Radosław Winiecki", email = "r.winiecki@outlook.com"}
-]
-readme = "README.md"
+authors = [{ name = "Radosław Winiecki", email = "r.winiecki@outlook.com" }]
 requires-python = ">=3.12"
+readme = "README.md"
 dependencies = [
     "spotipy (>=2.25.1,<3.0.0)",
     "python-dotenv (>=1.1.1,<2.0.0)",
-    "mutagen (>=1.47.0,<2.0.0)"
+    "mutagen (>=1.47.0,<2.0.0)",
 ]
 
-[tool.poetry]
-packages = [{include = "crate_digger", from = "src"}]
-
-
-[tool.poetry.group.dev.dependencies]
-pytest = "^8.4.1"
-jupyter = "^1.1.1"
-pandas = "^2.3.1"
-
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+[dependency-groups]
+dev = [
+    "pytest>=8.4.1,<9",
+    "jupyter>=1.1.1,<2",
+    "pandas>=2.3.1,<3",
+]

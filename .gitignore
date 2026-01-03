@@ -3,7 +3,6 @@
 .venv/
 .env
 .python-version
-poetry.lock
 
 notebooks/
 *.ipynb
