@@ -19,3 +19,9 @@ def get_logger(name: str = "crate_digger") -> logging.Logger:
         logger.addHandler(handler)
 
     return logger
+
+
+def pluralize(count: int, singular: str, plural: str | None = None) -> str:
+    """Return singular/plural word based on count."""
+
+    return singular if count == 1 else (plural or f"{singular}s")

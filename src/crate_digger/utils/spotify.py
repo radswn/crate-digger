@@ -16,7 +16,7 @@ from crate_digger.constants import (
     MAX_OFFSET,
     SEARCH_LIMIT,
 )
-from crate_digger.utils.logging import get_logger
+from crate_digger.utils.logging import get_logger, pluralize
 from crate_digger.utils.types import SpotifyAlbum, SpotifyTrack
 
 
@@ -81,7 +81,7 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbu
     relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
 
     n_releases = len(relevant_releases)
-    logger.info(f"Fetched {n_releases} new release{'s' if n_releases != 1 else ''} for label {label}")
+    logger.info(f"Fetched {n_releases} new {pluralize(n_releases, 'release')} for label {label}")
 
     return relevant_releases
 
@@ -112,7 +112,7 @@ def filter_exact_label_releases(client: Spotify, releases: List[SpotifyAlbum], l
 def fetch_album_tracks(client: Spotify, album: SpotifyAlbum) -> List[SpotifyTrack]:
     album_tracks: List[SpotifyTrack] = client.album_tracks(album["uri"])["items"]
     n_album_tracks = len(album_tracks)
-    logger.info(f"Fetched {n_album_tracks} track{'s' if n_album_tracks != 1 else ''} for release {album['name']}")
+    logger.info(f"Fetched {n_album_tracks} {pluralize(n_album_tracks, 'track')} for release {album['name']}")
 
     return album_tracks
 
@@ -122,29 +122,42 @@ def extract_track_uris(tracks: List[SpotifyTrack]) -> List[str]:
     return track_uris
 
 
+def _normalized_title(title: str) -> str:
+    """Normalize a track title for comparison (lowercase, punctuation/whitespace collapsed)."""
+
+    return " ".join(re.sub(r"[^\w\s]", "", title.lower()).split())
+
+
+def _is_extended_version(normalized_title: str) -> bool:
+    return "extended" in normalized_title
+
+
+def _base_title(normalized_title: str) -> str:
+    return normalized_title.replace(" extended mix", "").replace(" extended", "")
+
+
 def remove_extended_versions(tracks: List[SpotifyTrack]) -> List[SpotifyTrack]:
+    """Drop extended versions when an original exists, without mutating input track dicts."""
+
     sorted_tracks = sorted(tracks, key=lambda t: len(t["name"]))
 
-    unique_tracks = []
-    unique_lowercase_titles = set()
+    unique_tracks: List[SpotifyTrack] = []
+    seen_titles = set()
 
     for track in sorted_tracks:
-        title = track["name"]
-        normalized_title = " ".join(re.sub(r"[^\w\s]", "", title.lower()).split())
+        normalized = _normalized_title(track["name"])
+        base = _base_title(normalized)
 
-        is_extended = "extended" in normalized_title
+        if _is_extended_version(normalized) and base in seen_titles:
+            continue
 
-        original_title = normalized_title.replace(" extended mix", "").replace(" extended", "")
-        is_original_available = original_title in unique_lowercase_titles
-
-        if (is_extended and not is_original_available) or (not is_extended):
-            unique_lowercase_titles.add(original_title)
-            unique_tracks.append(track)
+        seen_titles.add(base)
+        unique_tracks.append(track)
 
     n_dropped_tracks = len(tracks) - len(unique_tracks)
 
     if n_dropped_tracks:
-        logger.info(f"Dropped {n_dropped_tracks} extended mix{'es' if n_dropped_tracks != 1 else ''}")
+        logger.info(f"Dropped {n_dropped_tracks} extended {pluralize(n_dropped_tracks, 'mix', 'mixes')}")
 
     return unique_tracks
 
@@ -153,7 +166,7 @@ def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) ->
     snapshot_id = client.playlist_add_items(playlist_id, track_uris)
 
     n_added_tracks = len(track_uris)
-    logger.info(f"Added {n_added_tracks} new track{'s' if n_added_tracks != 1 else ''} to the playlist")
+    logger.info(f"Added {n_added_tracks} new {pluralize(n_added_tracks, 'track')} to the playlist")
 
     return snapshot_id
 
@@ -178,7 +191,7 @@ def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
             page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=SEARCH_LIMIT)["albums"]["items"]
         len_end = len(releases)
         if len_end != len_beginning:
-            logger.info(f"Fetched {len_end - len_beginning} release{'s' if len_end - len_beginning != 1 else ''} for year {year}")
+            logger.info(f"Fetched {len_end - len_beginning} {pluralize(len_end - len_beginning, 'release')} for year {year}")
 
     logger.info(f"Fetched {len(releases)} releases in total")
 
@@ -199,7 +212,7 @@ def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
     logger.info(f"Dropped {n_duplicates_dropped} duplicate{'s' if n_duplicates_dropped != 1 else ''}")
 
     release_df = release_df.sort_values("release_date")
-    logger.info(f"{release_df.shape[0]} release{'s' if release_df.shape[0] != 1 else ''} left")
+    logger.info(f"{release_df.shape[0]} {pluralize(release_df.shape[0], 'release')} left")
 
     return release_df
 
@@ -225,8 +238,8 @@ def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: st
             total_dropped += len(album_tracks) - len(unique_track_uris)
             all_track_uris.extend(unique_track_uris)
 
-    logger.info(f"{len(all_track_uris)} track{'s' if len(all_track_uris) != 1 else ''} found")
-    logger.info(f"{total_dropped} track{'s' if total_dropped != 1 else ''} dropped")
+    logger.info(f"{len(all_track_uris)} {pluralize(len(all_track_uris), 'track')} found")
+    logger.info(f"{total_dropped} {pluralize(total_dropped, 'track')} dropped")
 
     return all_track_uris
 
