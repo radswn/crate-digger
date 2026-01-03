@@ -61,11 +61,14 @@ def ensure_id3(p: Path) -> ID3:
 COPY_FRAMES = ["TIT2","TPE1","TALB","TDRC","TYER","TRCK","TCON","TBPM","TKEY","COMM"]
 
 def frame_text(f):
-    if f is None: return None
+    if f is None:
+        return None
     try:
         v = getattr(f, "text", None)
-        if v is None: return str(f)
-        if isinstance(v, list): v = v[0] if v else ""
+        if v is None:
+            return str(f)
+        if isinstance(v, list):
+            v = v[0] if v else ""
         return str(v)
     except Exception:
         return "<binary>"

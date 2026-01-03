@@ -73,7 +73,7 @@ def test_fetch_and_add_all_extended_versions(monkeypatch):
 
     client.playlist_add_items.return_value = "snap123"
 
-    out = m.fetch_and_add(client, ["Label"], target_playlist="plid")
+    _ = m.fetch_and_add(client, ["Label"], target_playlist="plid")
 
     # Extended versions kept when no originals exist
     # Reverse order because of sorting by ascending name length

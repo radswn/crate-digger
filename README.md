@@ -40,13 +40,15 @@ src/crate_digger/
 - Spotify Developer account
 - Telegram Bot token
 - (Optional) AWS S3 + Terraform for CI/CD deployment
+- (Optional) [ty](https://docs.astral.sh/ty/) for type checking
+- (Optional) [Ruff](https://docs.astral.sh/ruff/) for linting
 
 ## Quick Start
 
 ### 1. Installation
 
 ```bash
-git clone https://github.com/yourusername/crate-digger.git
+git clone https://github.com/radswn/crate-digger.git
 cd crate-digger
 uv sync
 ```
@@ -191,10 +193,13 @@ The repository is configured to run daily via GitHub Actions:
 
 ```bash
 # Run full test suite
-uv run pytest --cov
+uv run pytest
 
-# Type checking (optional, requires ty (https://docs.astral.sh/ty/))
-uvx ty check
+# Type checking (ty)
+ty check
+
+# Lint (ruff)
+uv run ruff check
 ```
 
 ## Troubleshooting

@@ -202,7 +202,8 @@ def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
             releases.extend(page_of_found_releases)
             offset += SEARCH_LIMIT
 
-            if offset + SEARCH_LIMIT > MAX_OFFSET: break
+            if offset + SEARCH_LIMIT > MAX_OFFSET:
+                break
 
             page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=SEARCH_LIMIT)["albums"]["items"]
         len_end = len(releases)
