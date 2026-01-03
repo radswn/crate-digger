@@ -11,6 +11,12 @@ from spotipy import Spotify
 from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
 
 from crate_digger.utils.logging import get_logger
+from crate_digger.constants import (
+    FETCH_BATCH_SIZE,
+    BACKFILL_START_YEAR,
+    SEARCH_LIMIT,
+    MAX_OFFSET
+)
 
 
 logger = get_logger(__name__)
@@ -76,7 +82,7 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
 
 
 def fetch_new_releases(client: Spotify, label: str) -> List[Dict]:
-    new_releases = client.search(f"label:{label.replace('\'', '')} tag:new", limit=50, type="album")["albums"]["items"]
+    new_releases = client.search(f"label:{label.replace('\'', '')} tag:new", limit=SEARCH_LIMIT, type="album")["albums"]["items"]
     return new_releases
 
 
@@ -89,8 +95,8 @@ def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: st
     release_uris = [r["uri"] for r in releases]
     releases_with_correct_label = []
 
-    for i in range(0, len(release_uris), 20):
-        full_albums = client.albums(release_uris[i:i+20])["albums"]
+    for i in range(0, len(release_uris), FETCH_BATCH_SIZE):
+        full_albums = client.albums(release_uris[i:i+FETCH_BATCH_SIZE])["albums"]
         releases_with_correct_label.extend([a for a in full_albums if a["label"] == label])
 
     return releases_with_correct_label
@@ -154,22 +160,20 @@ def get_all_releases(client: Spotify, label: str) -> List[Dict]:
     releases = []
     search_normalized_label = label.replace('\'', '')
 
-    for year in range(1990, date.today().year + 1):
+    for year in range(BACKFILL_START_YEAR, date.today().year + 1):
         len_beginning = len(releases)
 
         offset = 0
-        page_size = 50
 
-        page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
+        page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=SEARCH_LIMIT)["albums"]["items"]
 
         while page_of_found_releases:
             releases.extend(page_of_found_releases)
-            offset += page_size
+            offset += SEARCH_LIMIT
 
-            if offset + page_size > 1000: break
+            if offset + SEARCH_LIMIT > MAX_OFFSET: break
 
-            page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=page_size)["albums"]["items"]
-
+            page_of_found_releases = client.search(f"label:{search_normalized_label} year:{year}", type="album", offset=offset, limit=SEARCH_LIMIT)["albums"]["items"]
         len_end = len(releases)
         if len_end != len_beginning:
             logger.info(f"Fetched {len_end - len_beginning} release{'s' if len_end - len_beginning != 1 else ''} for year {year}")
@@ -208,10 +212,9 @@ def get_all_release_uris(client: Spotify, label: str) -> pd.Series:
 def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: str) -> List[str]:
     total_dropped = 0
     all_track_uris = []
-    batch_size = 20
 
-    for i in range(0, len(album_uris), batch_size):
-        uris_batch = album_uris[i:i+batch_size]
+    for i in range(0, len(album_uris), FETCH_BATCH_SIZE):
+        uris_batch = album_uris[i:i+FETCH_BATCH_SIZE]
         album_batch = [a for a in client.albums(uris_batch)["albums"] if a["label"] == label]
 
         for album in album_batch:
