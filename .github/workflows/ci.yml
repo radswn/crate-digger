@@ -38,4 +38,4 @@ jobs:
         run: uvx ty check
 
       - name: Tests
-        run: uv run pytest --ignore=tests/test_auth..py
+        run: uv run pytest --ignore=tests/test_auth.py
