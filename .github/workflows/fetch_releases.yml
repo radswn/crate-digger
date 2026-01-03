@@ -31,24 +31,13 @@ jobs:
         with:
           python-version: '3.12.7'
 
-      - name: Install and configure Poetry
-        uses: snok/install-poetry@v1
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
         with:
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: .venv
-          installer-parallel: true
-
-      - name: Load cached venv
-        id: cached-poetry-dependencies
-        uses: actions/cache@v4
-        with:
-          path: .venv
-          key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock') }}
+          enable-cache: true
 
       - name: Install dependencies
-        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction
+        run: uv sync --frozen
 
       - name: Download cached tokens from S3
         run: aws s3 cp s3://radswn-spotify-auth-cache/.spotipy_cache .spotipy_cache --recursive
@@ -60,7 +49,7 @@ jobs:
           SPOTIPY_REDIRECT_URI: ${{ secrets.SPOTIPY_REDIRECT_URI }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: poetry run python src/crate_digger/main/fetch_new_releases.py
+        run: uv run python -m crate_digger.main.fetch_new_releases
 
       - name: Upload refreshed tokens back to S3
         run: aws s3 cp .spotipy_cache s3://radswn-spotify-auth-cache/.spotipy_cache --recursive
