@@ -35,6 +35,7 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
     track_info_to_send = {}
 
     for label in record_labels:
+        label_tracks_to_add = []
         relevant_releases = fetch_new_relevant_releases(client, label)
 
         if relevant_releases:
@@ -42,10 +43,20 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
 
         for release in relevant_releases:
             released_tracks = get_album_tracks(client, release)
-            tracks_to_add = remove_extended_versions(released_tracks)
-
-            uris_to_add.extend(get_uris(tracks_to_add))
+            label_tracks_to_add.extend(remove_extended_versions(released_tracks))
             track_info_to_send[label][release["name"]] = released_tracks
+
+        logged_tracks = set()
+        tracks_to_add = []
+
+        for track in label_tracks_to_add:
+            track_key = (track["name"].lower(), tuple(artist["name"].lower() for artist in track["artists"]))
+            if track_key in logged_tracks:
+                continue
+            logged_tracks.add(track_key)
+            tracks_to_add.append(track)
+
+        uris_to_add.extend(get_uris(tracks_to_add))
 
     if track_info_to_send:
         add_to_playlist(client, target_playlist, uris_to_add)
