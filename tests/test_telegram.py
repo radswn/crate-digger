@@ -28,7 +28,6 @@ r"""❗*NEW RELEASES*❗
                         {"name": "Someone Else"}
                     ],
                     "name": "Song",
-                    "is_added": True
                 },
                 {
                     "artists": [
@@ -36,7 +35,6 @@ r"""❗*NEW RELEASES*❗
                         {"name": "Someone Else"}
                     ],
                     "name": "Song - Extended Mix",
-                    "is_added": False
                 }
             ],
             "Amazing EP": [
@@ -45,7 +43,6 @@ r"""❗*NEW RELEASES*❗
                         {"name": "Someone As Well"}
                     ],
                     "name": "Song As Well",
-                    "is_added": True
                 }
             ]
         },
@@ -56,7 +53,6 @@ r"""❗*NEW RELEASES*❗
                         {"name": "Somebody"},
                     ],
                     "name": "Warm",
-                    "is_added": True
                 },
                 {
                     "artists": [
@@ -64,7 +60,6 @@ r"""❗*NEW RELEASES*❗
                         {"name": "DJ Person"},
                     ],
                     "name": "Warm - DJ Person Remix",
-                    "is_added": True
                 }
             ]
         }

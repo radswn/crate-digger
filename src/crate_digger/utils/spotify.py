@@ -104,10 +104,6 @@ def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: st
 
 def get_album_tracks(client: Spotify, album: Dict) -> List[Dict]:
     album_tracks = client.album_tracks(album["uri"])["items"]
-
-    for track in album_tracks:
-        track["is_added"] = False
-
     n_album_tracks = len(album_tracks)
     logger.info(f"Fetched {n_album_tracks} track{'s' if n_album_tracks != 1 else ''} for release {album['name']}")
 
@@ -136,7 +132,6 @@ def remove_extended_versions(tracks: List[Dict]) -> List[Dict]:
 
         if (is_extended and not is_original_available) or (not is_extended):
             unique_lowercase_titles.add(original_title)
-            track["is_added"] = True
             unique_tracks.append(track)
 
     n_dropped_tracks = len(tracks) - len(unique_tracks)

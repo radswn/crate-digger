@@ -67,7 +67,6 @@ def test_remove_extended_versions_prefers_original_when_present(m):
 
     out = m.remove_extended_versions(tracks)
     assert [t["uri"] for t in out] == ["uri:1"]
-    assert out[0]["is_added"] is True
 
 
 def test_remove_extended_versions_keeps_extended_if_original_missing(m):
@@ -77,7 +76,6 @@ def test_remove_extended_versions_keeps_extended_if_original_missing(m):
 
     out = m.remove_extended_versions(tracks)
     assert [t["uri"] for t in out] == ["uri:x"]
-    assert out[0]["is_added"] is True
 
 
 def test_remove_extended_versions_normalizes_punctuation_and_spaces(m):
@@ -149,21 +147,6 @@ def test_filter_exact_label_releases_batches_and_filters(m):
     second_call_uris = client.albums.call_args_list[1].args[0]
     assert len(first_call_uris) == 20
     assert len(second_call_uris) == 5
-
-
-def test_get_album_tracks_sets_is_added_false(m):
-    client = MagicMock()
-    client.album_tracks.return_value = {
-        "items": [
-            _mk_track("A", ["X"], "u1"),
-            _mk_track("B", ["Y"], "u2"),
-        ]
-    }
-    album = {"uri": "album:1", "name": "AlbumName"}
-
-    tracks = m.get_album_tracks(client, album)
-    assert len(tracks) == 2
-    assert all(t["is_added"] is False for t in tracks)
 
 
 def test_get_uris_extracts_uri(m):

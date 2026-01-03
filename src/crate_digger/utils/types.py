@@ -30,7 +30,6 @@ class SpotifyTrack(TypedDict):
     uri: str
     artists: List[SpotifyArtist]
     album: SpotifyAlbum
-    is_added: Optional[bool]
 
 
 class TrackInfo(TypedDict):
