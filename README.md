@@ -193,8 +193,8 @@ The repository is configured to run daily via GitHub Actions:
 # Run full test suite
 uv run pytest --cov
 
-# Type checking (optional, requires mypy/pyright)
-uv run mypy src/
+# Type checking (optional, requires ty (https://docs.astral.sh/ty/))
+uvx ty check
 ```
 
 ## Troubleshooting

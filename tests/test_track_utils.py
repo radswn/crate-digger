@@ -105,19 +105,11 @@ class TestDedupeTracksFunction:
         assert len(result) == 1
 
     def test_handles_multiple_artists(self):
-        track1 = {
-            "name": "Track",
-            "artists": [{"name": "A"}, {"name": "B"}],
-            "uri": "u1",
-            "album": {"name": "Album"},
-        }
-        track2 = {
-            "name": "Track",
-            "artists": [{"name": "A"}, {"name": "B"}],
-            "uri": "u2",
-            "album": {"name": "Album"},
-        }
-        result = dedupe_tracks([track1, track2])
+        tracks = [
+            _mk_track("Track", "A B", "u1"),
+            _mk_track("Track", "A B", "u2"),
+        ]
+        result = dedupe_tracks(tracks)
         assert len(result) == 1
 
     def test_handles_empty_list(self):

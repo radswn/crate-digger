@@ -3,7 +3,7 @@ from __future__ import annotations
 import tomllib
 from functools import lru_cache
 
-from typing import Dict, List, TypedDict
+from typing import Dict, List, TypedDict, cast
 
 
 class SpotifyConfig(TypedDict):
@@ -40,7 +40,7 @@ def _assert_str(value: object, key: str, section_name: str) -> str:
 def _validate_list_of_strings(value: object, key: str, section_name: str) -> List[str]:
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ValueError(f"Expected [{section_name}].{key} to be a list of strings")
-    return value
+    return cast(List[str], value)
 
 
 def load_config(config_path: str = "config.toml") -> AppConfig:

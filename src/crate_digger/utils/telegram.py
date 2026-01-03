@@ -5,6 +5,7 @@ from typing import Dict, List
 
 from crate_digger.utils.markdownv2 import bold, escape_markdown_v2
 from crate_digger.utils.logging import get_logger
+from crate_digger.utils.types import SpotifyTrack
 
 
 logger = get_logger(__name__)
@@ -26,7 +27,7 @@ def send_message(message: str) -> None:
         raise
 
 
-def construct_message(releases_info: Dict[str, Dict[str, List[Dict]]]) -> str:
+def construct_message(releases_info: Dict[str, Dict[str, List[SpotifyTrack]]]) -> str:
     n_tracks_found = sum([len(tracks) for release in releases_info.values() for tracks in release.values()])
 
     message_text = "❗" + bold("NEW RELEASES") + "❗" + "\n\n"

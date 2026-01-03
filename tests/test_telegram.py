@@ -5,6 +5,15 @@ from crate_digger.utils.telegram import construct_message, send_message
 from unittest.mock import Mock, patch
 
 
+def _mk_track(name, artist, uri):
+    return {
+        "name": name,
+        "artists": [{"name": artist}],
+        "uri": uri,
+        "album": {"name": "Album"},
+    }
+
+
 def test_construct_message():
     expected_message =  \
 r"""❗*NEW RELEASES*❗
@@ -26,45 +35,17 @@ r"""❗*NEW RELEASES*❗
     notification_content = {
         "Good Label": {
             "Nice Single": [
-                {
-                    "artists": [
-                        {"name": "Someone"},
-                        {"name": "Someone Else"}
-                    ],
-                    "name": "Song",
-                },
-                {
-                    "artists": [
-                        {"name": "Someone"},
-                        {"name": "Someone Else"}
-                    ],
-                    "name": "Song - Extended Mix",
-                }
+                _mk_track("Song", "Someone", "uri:1"),
+                _mk_track("Song - Extended Mix", "Someone", "uri:2"),
             ],
             "Amazing EP": [
-                {
-                    "artists": [
-                        {"name": "Someone As Well"}
-                    ],
-                    "name": "Song As Well",
-                }
+                _mk_track("Song As Well", "Someone As Well", "uri:3"),
             ]
         },
         "Cool Label": {
             "Warm EP": [
-                {
-                    "artists": [
-                        {"name": "Somebody"},
-                    ],
-                    "name": "Warm",
-                },
-                {
-                    "artists": [
-                        {"name": "Somebody"},
-                        {"name": "DJ Person"},
-                    ],
-                    "name": "Warm - DJ Person Remix",
-                }
+                _mk_track("Warm", "Somebody", "uri:4"),
+                _mk_track("Warm - DJ Person Remix", "Somebody", "uri:5"),
             ]
         }
     }
@@ -73,14 +54,6 @@ r"""❗*NEW RELEASES*❗
 
     assert msg == expected_message
 
-
-def _mk_track(name, artist, uri):
-    return {
-        "name": name,
-        "artists": [{"name": artist}],
-        "uri": uri,
-        "album": {"name": "Album"},
-    }
 
 
 def test_construct_message_single_label_single_album():
