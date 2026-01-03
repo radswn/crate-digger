@@ -24,6 +24,14 @@ logger = get_logger(__name__)
 
 
 def get_spotify_client(scope: str) -> Spotify:
+    """Create and return an authenticated Spotify client with cached OAuth token.
+    
+    Args:
+        scope: OAuth scope string for Spotify API permissions
+        
+    Returns:
+        Authenticated Spotify client instance
+    """
     load_dotenv()
 
     project_root = Path(__file__).resolve().parents[3]
@@ -42,6 +50,16 @@ def fetch_and_add(
     record_labels: List[str],
     target_playlist: str,
 ) -> Dict[str, Dict[str, List[SpotifyTrack]]]:
+    """Fetch yesterday's releases from labels, deduplicate, and add to playlist.
+    
+    Args:
+        client: Authenticated Spotify client
+        record_labels: List of record label names to search
+        target_playlist: Spotify playlist URI to add tracks to
+        
+    Returns:
+        Dict mapping labels to their releases and tracks for notification
+    """
     uris_to_add = []
     track_info_to_send: Dict[str, Dict[str, List[SpotifyTrack]]] = {}
 
@@ -68,6 +86,15 @@ def fetch_and_add(
 
 
 def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
+    """Fetch yesterday's releases from a label with exact label name matching.
+    
+    Args:
+        client: Authenticated Spotify client
+        label: Record label name to search for
+        
+    Returns:
+        List of album objects released yesterday with exact label match
+    """
     new_releases = fetch_new_releases(client, label)
     yesterdays_releases = filter_yesterdays_releases(new_releases)
     relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
@@ -79,6 +106,15 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbu
 
 
 def fetch_new_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
+    """Search Spotify for new releases tagged with the given label.
+    
+    Args:
+        client: Authenticated Spotify client
+        label: Record label name to search for
+        
+    Returns:
+        List of album objects from Spotify search results
+    """
     new_releases = client.search(
         f"label:{label.replace("'", '')} tag:new", limit=SEARCH_LIMIT, type="album"
     )["albums"]["items"]
@@ -93,11 +129,31 @@ def batch(iterable: Sequence[str], size: int) -> Iterable[Sequence[str]]:
 
 
 def filter_yesterdays_releases(releases: List[SpotifyAlbum]) -> List[SpotifyAlbum]:
+    """Filter releases to only those with yesterday's release date.
+    
+    Args:
+        releases: List of Spotify album objects
+        
+    Returns:
+        Filtered list containing only yesterday's releases
+    """
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     return [r for r in releases if r["release_date"] == yesterday]
 
 
 def filter_exact_label_releases(client: Spotify, releases: List[SpotifyAlbum], label: str) -> List[SpotifyAlbum]:
+    """Fetch full album details and filter to exact label name matches.
+    
+    Spotify search may return approximate matches; this verifies the label field.
+    
+    Args:
+        client: Authenticated Spotify client
+        releases: List of album objects from search results
+        label: Exact label name to match
+        
+    Returns:
+        List of albums with exact label match
+    """
     release_uris = [r["uri"] for r in releases]
     releases_with_correct_label = []
 
@@ -109,6 +165,15 @@ def filter_exact_label_releases(client: Spotify, releases: List[SpotifyAlbum], l
 
 
 def fetch_album_tracks(client: Spotify, album: SpotifyAlbum) -> List[SpotifyTrack]:
+    """Fetch all tracks for a given album.
+    
+    Args:
+        client: Authenticated Spotify client
+        album: Spotify album object
+        
+    Returns:
+        List of track objects from the album
+    """
     album_tracks: List[SpotifyTrack] = client.album_tracks(album["uri"])["items"]
     n_album_tracks = len(album_tracks)
     logger.info(f"Fetched {n_album_tracks} {pluralize(n_album_tracks, 'track')} for release {album['name']}")
@@ -117,6 +182,14 @@ def fetch_album_tracks(client: Spotify, album: SpotifyAlbum) -> List[SpotifyTrac
 
 
 def extract_track_uris(tracks: List[SpotifyTrack]) -> List[str]:
+    """Extract Spotify URIs from a list of track objects.
+    
+    Args:
+        tracks: List of Spotify track objects
+        
+    Returns:
+        List of Spotify track URIs
+    """
     track_uris = [track["uri"] for track in tracks]
     return track_uris
 
@@ -128,10 +201,26 @@ def normalize_title(title: str) -> str:
 
 
 def is_extended_version(normalized_title: str) -> bool:
+    """Check if a normalized title indicates an extended version.
+    
+    Args:
+        normalized_title: Pre-normalized title string
+        
+    Returns:
+        True if title contains 'extended' keyword
+    """
     return "extended" in normalized_title
 
 
 def base_title(normalized_title: str) -> str:
+    """Extract base title by removing 'extended' suffixes.
+    
+    Args:
+        normalized_title: Pre-normalized title string
+        
+    Returns:
+        Base title with extended version indicators removed
+    """
     return normalized_title.replace(" extended mix", "").replace(" extended", "")
 
 
@@ -162,6 +251,14 @@ def remove_extended_versions(tracks: List[SpotifyTrack]) -> List[SpotifyTrack]:
 
 
 def dedupe_tracks(tracks: Sequence[SpotifyTrack]) -> List[SpotifyTrack]:
+    """Remove duplicate tracks based on (name, artists) key.
+    
+    Args:
+        tracks: Sequence of Spotify track objects
+        
+    Returns:
+        Deduplicated list of tracks
+    """
     deduped: List[SpotifyTrack] = []
     seen: set[Tuple[str, Tuple[str, ...]]] = set()
 
@@ -179,6 +276,16 @@ def dedupe_tracks(tracks: Sequence[SpotifyTrack]) -> List[SpotifyTrack]:
 
 
 def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) -> Dict:
+    """Add tracks to a Spotify playlist.
+    
+    Args:
+        client: Authenticated Spotify client
+        playlist_id: Spotify playlist URI
+        track_uris: List of track URIs to add
+        
+    Returns:
+        Snapshot ID dict from Spotify API
+    """
     snapshot_id = client.playlist_add_items(playlist_id, track_uris)
 
     n_added_tracks = len(track_uris)
@@ -188,6 +295,15 @@ def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) ->
 
 
 def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
+    """Fetch all releases for a label from BACKFILL_START_YEAR to present.
+    
+    Args:
+        client: Authenticated Spotify client
+        label: Record label name
+        
+    Returns:
+        List of all album objects for the label
+    """
     releases = []
     search_normalized_label = label.replace('\'', '')
 
@@ -216,6 +332,14 @@ def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
 
 
 def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
+    """Parse and clean release data into DataFrame with deduplication.
+    
+    Args:
+        releases: List of Spotify album objects
+        
+    Returns:
+        Cleaned and deduplicated DataFrame of releases sorted by date
+    """
     release_df = pd.DataFrame(releases)
 
     size_beginning = release_df.shape[0]
@@ -235,6 +359,15 @@ def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
 
 
 def fetch_all_release_uris(client: Spotify, label: str) -> pd.Series:
+    """Fetch and parse all release URIs for a label.
+    
+    Args:
+        client: Authenticated Spotify client
+        label: Record label name
+        
+    Returns:
+        Series of release URIs
+    """
     all_releases = fetch_all_releases(client, label)
     parsed_df = parse_releases(all_releases)
     release_uris = parsed_df.uri
@@ -242,6 +375,16 @@ def fetch_all_release_uris(client: Spotify, label: str) -> pd.Series:
 
 
 def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: str) -> List[str]:
+    """Collect all track URIs from albums, filtering extended versions.
+    
+    Args:
+        client: Authenticated Spotify client
+        album_uris: Series of album URIs
+        label: Exact label name to verify
+        
+    Returns:
+        List of track URIs with extended versions removed
+    """
     total_dropped = 0
     all_track_uris = []
 
@@ -261,6 +404,14 @@ def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: st
 
 
 def create_playlists(client: Spotify, playlist_name: str, track_uris: List[str], step_size:int=50) -> None:
+    """Create numbered playlists with batches of tracks and date range descriptions.
+    
+    Args:
+        client: Authenticated Spotify client
+        playlist_name: Base name for playlists (will be numbered)
+        track_uris: List of track URIs to split into playlists
+        step_size: Number of tracks per playlist (default 50)
+    """
     for i in range(0, len(track_uris), step_size):
         full_playlist_name = f"{playlist_name} {(i // step_size) + 1:03d}"
         first_track_release_date = fetch_track_release_date(client, track_uris[i])
@@ -275,4 +426,13 @@ def create_playlists(client: Spotify, playlist_name: str, track_uris: List[str],
 
 
 def fetch_track_release_date(client: Spotify, track_uri: str) -> str:
+    """Fetch the release date for a track.
+    
+    Args:
+        client: Authenticated Spotify client
+        track_uri: Spotify track URI
+        
+    Returns:
+        Release date string from track's album
+    """
     return client.track(track_uri)["album"]["release_date"]

@@ -26,18 +26,54 @@ class AppConfig(TypedDict):
 
 
 def _require_keys(section: Dict, required: List[str], section_name: str) -> None:
+    """Validate that all required keys are present in a config section.
+    
+    Args:
+        section: Config section dict
+        required: List of required key names
+        section_name: Section name for error messages
+        
+    Raises:
+        ValueError: If any required keys are missing
+    """
     missing = [k for k in required if k not in section]
     if missing:
         raise ValueError(f"Missing keys in [{section_name}]: {', '.join(missing)}")
 
 
 def _assert_str(value: object, key: str, section_name: str) -> str:
+    """Assert that a config value is a string.
+    
+    Args:
+        value: Config value to check
+        key: Config key name
+        section_name: Section name for error messages
+        
+    Returns:
+        The value cast to str
+        
+    Raises:
+        ValueError: If value is not a string
+    """
     if not isinstance(value, str):
         raise ValueError(f"Expected [{section_name}].{key} to be a string")
     return value
 
 
 def _validate_list_of_strings(value: object, key: str, section_name: str) -> List[str]:
+    """Validate that a config value is a list of strings.
+    
+    Args:
+        value: Config value to check
+        key: Config key name
+        section_name: Section name for error messages
+        
+    Returns:
+        The value cast to List[str]
+        
+    Raises:
+        ValueError: If value is not a list of strings
+    """
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
         raise ValueError(f"Expected [{section_name}].{key} to be a list of strings")
     return cast(List[str], value)

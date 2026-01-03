@@ -12,6 +12,14 @@ logger = get_logger(__name__)
 
 
 def send_message(message: str) -> None:
+    """Send a message via Telegram Bot API with MarkdownV2 formatting.
+    
+    Args:
+        message: Message text with MarkdownV2 formatting
+        
+    Raises:
+        requests.RequestException: If Telegram API request fails
+    """
     url = f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN')}/sendMessage"
     data = {
         "chat_id": os.getenv("TELEGRAM_CHAT_ID"),
@@ -28,6 +36,14 @@ def send_message(message: str) -> None:
 
 
 def construct_message(releases_info: Dict[str, Dict[str, List[SpotifyTrack]]]) -> str:
+    """Construct a formatted Telegram message from release information.
+    
+    Args:
+        releases_info: Dict mapping labels to their releases and tracks
+        
+    Returns:
+        MarkdownV2-formatted message string
+    """
     n_tracks_found = sum([len(tracks) for release in releases_info.values() for tracks in release.values()])
 
     message_text = "❗" + bold("NEW RELEASES") + "❗" + "\n\n"
