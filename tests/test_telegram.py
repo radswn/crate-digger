@@ -1,3 +1,4 @@
+import textwrap
 import pytest
 import requests
 
@@ -15,22 +16,23 @@ def _mk_track(name, artist, uri):
 
 
 def test_construct_message():
-    expected_message =  \
-r"""❗*NEW RELEASES*❗
+    expected_message =  textwrap.dedent(
+        """\
+        ❗*NEW RELEASES*❗
 
-🎵 FOUND *5* TRACKS 🎵
-
-
-🎤 GOOD LABEL
-
-💿 Nice Single
-💿 Amazing EP
+        🎵 FOUND *5* TRACKS 🎵
 
 
-🎤 COOL LABEL
+        🎤 GOOD LABEL
 
-💿 Warm EP
-"""
+        💿 Nice Single
+        💿 Amazing EP
+
+
+        🎤 COOL LABEL
+
+        💿 Warm EP
+        """)
 
     notification_content = {
         "Good Label": {
