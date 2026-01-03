@@ -4,19 +4,20 @@ import pandas as pd
 
 from datetime import date, timedelta
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict, List
 from dotenv import load_dotenv
 
 from spotipy import Spotify
-from spotipy.oauth2 import SpotifyOAuth, CacheFileHandler
+from spotipy.oauth2 import CacheFileHandler, SpotifyOAuth
 
-from crate_digger.utils.logging import get_logger
 from crate_digger.constants import (
-    FETCH_BATCH_SIZE,
     BACKFILL_START_YEAR,
+    FETCH_BATCH_SIZE,
+    MAX_OFFSET,
     SEARCH_LIMIT,
-    MAX_OFFSET
 )
+from crate_digger.utils.logging import get_logger
+from crate_digger.utils.types import SpotifyAlbum, SpotifyTrack
 
 
 logger = get_logger(__name__)
@@ -36,9 +37,13 @@ def get_spotify_client(scope: str) -> Spotify:
     return sp
 
 
-def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: str) -> Dict[str, Dict[str, List[Dict]]]:
+def fetch_and_add(
+    client: Spotify,
+    record_labels: List[str],
+    target_playlist: str,
+) -> Dict[str, Dict[str, List[SpotifyTrack]]]:
     uris_to_add = []
-    track_info_to_send = {}
+    track_info_to_send: Dict[str, Dict[str, List[SpotifyTrack]]] = {}
 
     for label in record_labels:
         label_tracks_to_add = []
@@ -70,7 +75,7 @@ def fetch_and_add(client: Spotify, record_labels: List[str], target_playlist: st
     return track_info_to_send
 
 
-def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
+def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
     new_releases = fetch_new_releases(client, label)
     yesterdays_releases = filter_yesterdays_releases(new_releases)
     relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
@@ -81,17 +86,19 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[Dict]:
     return relevant_releases
 
 
-def fetch_new_releases(client: Spotify, label: str) -> List[Dict]:
-    new_releases = client.search(f"label:{label.replace('\'', '')} tag:new", limit=SEARCH_LIMIT, type="album")["albums"]["items"]
+def fetch_new_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
+    new_releases = client.search(
+        f"label:{label.replace("'", '')} tag:new", limit=SEARCH_LIMIT, type="album"
+    )["albums"]["items"]
     return new_releases
 
 
-def filter_yesterdays_releases(releases: List[Dict]) -> List[Dict]:
+def filter_yesterdays_releases(releases: List[SpotifyAlbum]) -> List[SpotifyAlbum]:
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     return [r for r in releases if r["release_date"] == yesterday]
 
 
-def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: str) -> List[Dict]:
+def filter_exact_label_releases(client: Spotify, releases: List[SpotifyAlbum], label: str) -> List[SpotifyAlbum]:
     release_uris = [r["uri"] for r in releases]
     releases_with_correct_label = []
 
@@ -102,20 +109,20 @@ def filter_exact_label_releases(client: Spotify, releases: List[Dict], label: st
     return releases_with_correct_label
 
 
-def get_album_tracks(client: Spotify, album: Dict) -> List[Dict]:
-    album_tracks = client.album_tracks(album["uri"])["items"]
+def get_album_tracks(client: Spotify, album: SpotifyAlbum) -> List[SpotifyTrack]:
+    album_tracks: List[SpotifyTrack] = client.album_tracks(album["uri"])["items"]
     n_album_tracks = len(album_tracks)
     logger.info(f"Fetched {n_album_tracks} track{'s' if n_album_tracks != 1 else ''} for release {album['name']}")
 
     return album_tracks
 
 
-def get_uris(tracks: List[Dict]) -> List[str]:
+def get_uris(tracks: List[SpotifyTrack]) -> List[str]:
     track_uris = [track["uri"] for track in tracks]
     return track_uris
 
 
-def remove_extended_versions(tracks: List[Dict]) -> List[Dict]:
+def remove_extended_versions(tracks: List[SpotifyTrack]) -> List[SpotifyTrack]:
     sorted_tracks = sorted(tracks, key=lambda t: len(t["name"]))
 
     unique_tracks = []
@@ -151,7 +158,7 @@ def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) ->
     return snapshot_id
 
 
-def get_all_releases(client: Spotify, label: str) -> List[Dict]:
+def get_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
     releases = []
     search_normalized_label = label.replace('\'', '')
 
@@ -178,7 +185,7 @@ def get_all_releases(client: Spotify, label: str) -> List[Dict]:
     return releases
 
 
-def parse_releases(releases: List[Dict]) -> pd.DataFrame:
+def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
     release_df = pd.DataFrame(releases)
 
     size_beginning = release_df.shape[0]
