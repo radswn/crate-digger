@@ -1,8 +1,7 @@
-"""Configuration loading and validation utilities."""
-
 from __future__ import annotations
 
 import tomllib
+from functools import lru_cache
 
 from typing import Dict, List, TypedDict
 
@@ -70,3 +69,9 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
     }
 
     return {"spotify": spotify_cfg, "labels": labels_cfg}
+
+
+@lru_cache(maxsize=1)
+def get_settings(config_path: str = "config.toml") -> AppConfig:
+    """Load and cache application settings; reuses config across calls."""
+    return load_config(config_path)

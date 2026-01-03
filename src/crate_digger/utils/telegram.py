@@ -21,8 +21,9 @@ def send_message(message: str) -> None:
     try:
         resp = requests.post(url, data=data)
         resp.raise_for_status()
-    except requests.HTTPError as e:
-        logger.error(f"Failed to send Telegram message: {e}")
+    except requests.RequestException as e:
+        logger.error(f"Telegram request failed: {e}")
+        raise
 
 
 def construct_message(releases_info: Dict[str, Dict[str, List[Dict]]]) -> str:

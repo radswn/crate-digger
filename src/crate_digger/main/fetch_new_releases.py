@@ -1,9 +1,9 @@
 from crate_digger.utils.spotify import get_spotify_client, fetch_and_add
-from crate_digger.utils.config import load_config
+from crate_digger.utils.config import get_settings
 from crate_digger.utils.telegram import construct_message, send_message
 
 
-config = load_config()
+config = get_settings()
 sp = get_spotify_client("playlist-modify-private")
 
 track_info_to_send = fetch_and_add(

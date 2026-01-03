@@ -87,6 +87,19 @@ def test_remove_extended_versions_normalizes_punctuation_and_spaces(m):
     assert [t["uri"] for t in out] == ["u1"]
 
 
+def test_remove_extended_versions_handles_unicode(m):
+    tracks = [
+        _mk_track("Café", ["A"], "u1"),
+        _mk_track("Café (Extended Mix)", ["A"], "u2"),
+    ]
+    out = m.remove_extended_versions(tracks)
+    assert [t["uri"] for t in out] == ["u1"]
+
+
+def test_remove_extended_versions_empty_list(m):
+    assert m.remove_extended_versions([]) == []
+
+
 def test_parse_releases_drops_columns_dedupes_and_sorts(m):
     releases = [
         {

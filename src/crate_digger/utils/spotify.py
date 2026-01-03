@@ -4,7 +4,7 @@ import pandas as pd
 
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, Iterable, List, Sequence, Tuple
 from dotenv import load_dotenv
 
 from spotipy import Spotify
@@ -46,7 +46,7 @@ def fetch_and_add(
     track_info_to_send: Dict[str, Dict[str, List[SpotifyTrack]]] = {}
 
     for label in record_labels:
-        label_tracks_to_add = []
+        label_tracks_to_add: List[SpotifyTrack] = []
         relevant_releases = fetch_new_relevant_releases(client, label)
 
         if relevant_releases:
@@ -54,20 +54,12 @@ def fetch_and_add(
 
         for release in relevant_releases:
             released_tracks = fetch_album_tracks(client, release)
-            label_tracks_to_add.extend(remove_extended_versions(released_tracks))
+            filtered_tracks = remove_extended_versions(released_tracks)
+            label_tracks_to_add.extend(filtered_tracks)
             track_info_to_send[label][release["name"]] = released_tracks
 
-        logged_tracks = set()
-        tracks_to_add = []
-
-        for track in label_tracks_to_add:
-            track_key = (track["name"].lower(), tuple(artist["name"].lower() for artist in track["artists"]))
-            if track_key in logged_tracks:
-                continue
-            logged_tracks.add(track_key)
-            tracks_to_add.append(track)
-
-        uris_to_add.extend(extract_track_uris(tracks_to_add))
+        deduped_tracks = dedupe_tracks(label_tracks_to_add)
+        uris_to_add.extend(extract_track_uris(deduped_tracks))
 
     if track_info_to_send:
         add_to_playlist(client, target_playlist, uris_to_add)
@@ -93,6 +85,13 @@ def fetch_new_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
     return new_releases
 
 
+def batch(iterable: Sequence[str], size: int) -> Iterable[Sequence[str]]:
+    """Yield fixed-size slices from a sequence."""
+
+    for i in range(0, len(iterable), size):
+        yield iterable[i : i + size]
+
+
 def filter_yesterdays_releases(releases: List[SpotifyAlbum]) -> List[SpotifyAlbum]:
     yesterday = (date.today() - timedelta(days=1)).isoformat()
     return [r for r in releases if r["release_date"] == yesterday]
@@ -102,8 +101,8 @@ def filter_exact_label_releases(client: Spotify, releases: List[SpotifyAlbum], l
     release_uris = [r["uri"] for r in releases]
     releases_with_correct_label = []
 
-    for i in range(0, len(release_uris), FETCH_BATCH_SIZE):
-        full_albums = client.albums(release_uris[i:i+FETCH_BATCH_SIZE])["albums"]
+    for uris_chunk in batch(release_uris, FETCH_BATCH_SIZE):
+        full_albums = client.albums(uris_chunk)["albums"]
         releases_with_correct_label.extend([a for a in full_albums if a["label"] == label])
 
     return releases_with_correct_label
@@ -122,17 +121,17 @@ def extract_track_uris(tracks: List[SpotifyTrack]) -> List[str]:
     return track_uris
 
 
-def _normalized_title(title: str) -> str:
+def normalize_title(title: str) -> str:
     """Normalize a track title for comparison (lowercase, punctuation/whitespace collapsed)."""
 
     return " ".join(re.sub(r"[^\w\s]", "", title.lower()).split())
 
 
-def _is_extended_version(normalized_title: str) -> bool:
+def is_extended_version(normalized_title: str) -> bool:
     return "extended" in normalized_title
 
 
-def _base_title(normalized_title: str) -> str:
+def base_title(normalized_title: str) -> str:
     return normalized_title.replace(" extended mix", "").replace(" extended", "")
 
 
@@ -142,13 +141,13 @@ def remove_extended_versions(tracks: List[SpotifyTrack]) -> List[SpotifyTrack]:
     sorted_tracks = sorted(tracks, key=lambda t: len(t["name"]))
 
     unique_tracks: List[SpotifyTrack] = []
-    seen_titles = set()
+    seen_titles: set[str] = set()
 
     for track in sorted_tracks:
-        normalized = _normalized_title(track["name"])
-        base = _base_title(normalized)
+        normalized = normalize_title(track["name"])
+        base = base_title(normalized)
 
-        if _is_extended_version(normalized) and base in seen_titles:
+        if is_extended_version(normalized) and base in seen_titles:
             continue
 
         seen_titles.add(base)
@@ -160,6 +159,23 @@ def remove_extended_versions(tracks: List[SpotifyTrack]) -> List[SpotifyTrack]:
         logger.info(f"Dropped {n_dropped_tracks} extended {pluralize(n_dropped_tracks, 'mix', 'mixes')}")
 
     return unique_tracks
+
+
+def dedupe_tracks(tracks: Sequence[SpotifyTrack]) -> List[SpotifyTrack]:
+    deduped: List[SpotifyTrack] = []
+    seen: set[Tuple[str, Tuple[str, ...]]] = set()
+
+    for track in tracks:
+        key = (
+            track["name"].lower(),
+            tuple(artist["name"].lower() for artist in track["artists"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(track)
+
+    return deduped
 
 
 def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) -> Dict:
@@ -228,8 +244,7 @@ def collect_tracks_from_albums(client: Spotify, album_uris: pd.Series, label: st
     total_dropped = 0
     all_track_uris = []
 
-    for i in range(0, len(album_uris), FETCH_BATCH_SIZE):
-        uris_batch = album_uris[i:i+FETCH_BATCH_SIZE]
+    for uris_batch in batch(list(album_uris), FETCH_BATCH_SIZE):
         album_batch = [a for a in client.albums(uris_batch)["albums"] if a["label"] == label]
 
         for album in album_batch:

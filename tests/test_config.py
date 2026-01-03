@@ -2,7 +2,7 @@ import textwrap
 
 import pytest
 
-from crate_digger.utils.config import load_config
+from crate_digger.utils.config import load_config, get_settings
 
 
 def test_load_config_valid(tmp_path):
@@ -53,3 +53,33 @@ def test_load_config_requires_strings_and_lists(tmp_path):
 
     with pytest.raises(ValueError):
         load_config(cfg_file)
+
+
+def test_get_settings_caches_config(tmp_path):
+    config_text = textwrap.dedent(
+        """
+        [spotify]
+        to-listen-playlist = "pl:1"
+        test-playlist = "pl:test"
+        scopes = ["a"]
+
+        [labels]
+        names = ["Label"]
+        """
+    )
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(config_text)
+
+    # Clear cache before test
+    get_settings.cache_clear()
+
+    cfg1 = get_settings(str(cfg_file))
+    cfg2 = get_settings(str(cfg_file))
+
+    # Should return same object (cached)
+    assert cfg1 is cfg2
+
+
+def test_load_config_file_not_found():
+    with pytest.raises(FileNotFoundError):
+        load_config("/nonexistent/path/config.toml")

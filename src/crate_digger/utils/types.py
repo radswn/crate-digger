@@ -1,8 +1,3 @@
-"""Typed dictionary definitions for Spotify entities used across crate-digger.
-
-Keeping these in one place makes data shapes explicit and helps static checkers.
-"""
-
 from __future__ import annotations
 
 from typing import List, TypedDict
