@@ -149,12 +149,12 @@ def test_filter_exact_label_releases_batches_and_filters(m):
     assert len(second_call_uris) == 5
 
 
-def test_get_uris_extracts_uri(m):
+def test_extract_track_uris_extracts_uri(m):
     tracks = [
         {"uri": "u1"},
         {"uri": "u2"},
     ]
-    assert m.get_uris(tracks) == ["u1", "u2"]
+    assert m.extract_track_uris(tracks) == ["u1", "u2"]
 
 
 def test_add_to_playlist_calls_playlist_add_items(m):
@@ -166,7 +166,7 @@ def test_add_to_playlist_calls_playlist_add_items(m):
     client.playlist_add_items.assert_called_once_with("playlist_id", ["u1", "u2"])
 
 
-def test_get_all_releases_paginates_within_year(m, monkeypatch):
+def test_fetch_all_releases_paginates_within_year(m, monkeypatch):
     # limit loop to year=1990 only
     import datetime as _dt
     class _RealFakeDate(_dt.date):
@@ -183,7 +183,7 @@ def test_get_all_releases_paginates_within_year(m, monkeypatch):
         {"albums": {"items": []}},
     ]
 
-    out = m.get_all_releases(client, "Label's Name")
+    out = m.fetch_all_releases(client, "Label's Name")
     assert [r["uri"] for r in out] == ["a", "b"]
     assert client.search.call_count == 2
 
@@ -229,10 +229,10 @@ def test_collect_tracks_from_albums_filters_extended(m):
     assert out == ["t1", "t4"]  # only from label=Good and non-extended
 
 
-def test_get_track_release_date_reads_track_album_release_date(m):
+def test_fetch_track_release_date_reads_track_album_release_date(m):
     client = MagicMock()
     client.track.return_value = {"album": {"release_date": "2021-02-03"}}
-    assert m.get_track_release_date(client, "track:1") == "2021-02-03"
+    assert m.fetch_track_release_date(client, "track:1") == "2021-02-03"
     client.track.assert_called_once_with("track:1")
 
 
@@ -257,7 +257,7 @@ def test_create_playlists_creates_multiple_and_adds_tracks(m, monkeypatch):
         "t4": "2020-01-04",
         "t5": "2020-01-05",
     }
-    monkeypatch.setattr(m, "get_track_release_date", lambda c, uri: release_dates[uri])
+    monkeypatch.setattr(m, "fetch_track_release_date", lambda c, uri: release_dates[uri])
 
     tracks = ["t1", "t2", "t3", "t4", "t5"]
     m.create_playlists(client, "My Playlist", tracks, step_size=2)
@@ -306,7 +306,7 @@ def test_fetch_and_add_deduplicates_tracks_before_adding(m, monkeypatch):
         _mk_track("Same", ["A"], "u2", album_name="Album1"),  # duplicate by key, should be dropped
         _mk_track("Other", ["A"], "u3", album_name="Album1"),
     ]
-    monkeypatch.setattr(m, "get_album_tracks", lambda c, album: album_tracks)
+    monkeypatch.setattr(m, "fetch_album_tracks", lambda c, album: album_tracks)
 
     # don’t change list in remove_extended_versions for this test
     monkeypatch.setattr(m, "remove_extended_versions", lambda tracks: tracks)
@@ -339,7 +339,7 @@ def test_fetch_and_add_track_info_is_grouped_per_album(m, monkeypatch):
         _mk_track("A", ["X"], "u1", album_name="Album1"),
         _mk_track("B", ["X"], "u2", album_name="Album1"),
     ]
-    monkeypatch.setattr(m, "get_album_tracks", lambda c, album: album_tracks)
+    monkeypatch.setattr(m, "fetch_album_tracks", lambda c, album: album_tracks)
     monkeypatch.setattr(m, "remove_extended_versions", lambda tracks: tracks)
     monkeypatch.setattr(m, "add_to_playlist", lambda *args, **kwargs: None)
 
