@@ -11,6 +11,7 @@ notebooks/
 .spotipy_cache/
 __pycache__/
 .pytest_cache/
+.ruff_cache/
 
 .terraform/
 .terraform.tfstate.lock.info
