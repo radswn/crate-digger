@@ -35,7 +35,7 @@ src/crate_digger/
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.14+
 - [uv](https://github.com/astral-sh/uv)
 - Spotify Developer account
 - Telegram Bot token
@@ -51,6 +51,7 @@ src/crate_digger/
 git clone https://github.com/radswn/crate-digger.git
 cd crate-digger
 uv sync
+uv pip install -e .
 ```
 
 ### 2. Configure
@@ -138,9 +139,6 @@ uv run python -m crate_digger.main.backfill_label_history "Label Name"
 # Run all tests
 uv run pytest
 
-# Run with coverage
-uv run pytest --cov=crate_digger
-
 # Run specific test file
 uv run pytest tests/test_spotify.py
 ```
@@ -196,7 +194,7 @@ The repository is configured to run daily via GitHub Actions:
 uv run pytest
 
 # Type checking (ty)
-ty check
+uv run ty check
 
 # Lint (ruff)
 uv run ruff check
