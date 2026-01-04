@@ -11,14 +11,18 @@ from mutagen.id3 import ID3, ID3NoHeaderError, COMM
 VOCALS_ANY_RE = re.compile(r"[\s_\-–—]*\(?vocals\)?[\s_\-–—]*$", re.IGNORECASE)
 
 # Leading index patterns: 01, 1-18, 2_01, 9_01-01, 01., 02) etc.; allow multiple groups
-LEAD_IDX_RE = re.compile(r"""
+LEAD_IDX_RE = re.compile(
+    r"""
     ^\s*                                   # start + optional space
     (?:\d{1,3}(?:[_.\-–—]\d{1,3})*)        # number or number-number etc.
     (?:[). _\-–—]*)                        # trailing separators after index
-""", re.VERBOSE)
+""",
+    re.VERBOSE,
+)
 
 # Strip zero-width chars & NBSPs
 ZWS_RE = re.compile(r"[\u200B-\u200D\uFEFF\u2060\u00A0]")
+
 
 def strip_leading_index(s: str) -> str:
     # Remove one or more leading index groups if they repeat
@@ -27,6 +31,7 @@ def strip_leading_index(s: str) -> str:
         prev = s
         s = LEAD_IDX_RE.sub("", s, count=1)
     return s
+
 
 def clean_stem(stem: str, is_acapella: bool) -> str:
     # Unicode normalize and remove invisible/nbsp
@@ -47,8 +52,10 @@ def clean_stem(stem: str, is_acapella: bool) -> str:
     s = re.sub(r"[^A-Za-z0-9]+", " ", s).strip().casefold()
     return s
 
+
 def key_for_path(p: Path, is_acapella: bool) -> str:
     return clean_stem(p.stem, is_acapella)
+
 
 def ensure_id3(p: Path) -> ID3:
     try:
@@ -58,7 +65,20 @@ def ensure_id3(p: Path) -> ID3:
         id3.save(p)
         return ID3(p)
 
-COPY_FRAMES = ["TIT2","TPE1","TALB","TDRC","TYER","TRCK","TCON","TBPM","TKEY","COMM"]
+
+COPY_FRAMES = [
+    "TIT2",
+    "TPE1",
+    "TALB",
+    "TDRC",
+    "TYER",
+    "TRCK",
+    "TCON",
+    "TBPM",
+    "TKEY",
+    "COMM",
+]
+
 
 def frame_text(f):
     if f is None:
@@ -73,6 +93,7 @@ def frame_text(f):
     except Exception:
         return "<binary>"
 
+
 def copy_frames(src: ID3, dst: ID3, overwrite: bool):
     changes = {}
     for fid in COPY_FRAMES:
@@ -84,13 +105,20 @@ def copy_frames(src: ID3, dst: ID3, overwrite: bool):
             exist = dst.getall("COMM")
             oldv = frame_text(exist[0]) if exist else None
             if overwrite or not exist:
-                dst.setall("COMM", [COMM(encoding=3, lang=srcf.lang, desc=srcf.desc, text=srcf.text)])
+                dst.setall(
+                    "COMM",
+                    [COMM(encoding=3, lang=srcf.lang, desc=srcf.desc, text=srcf.text)],
+                )
                 changes[fid] = (oldv, frame_text(srcf))
         else:
             srcf = src_list[0]
             oldf = dst.get(fid)
             oldv = frame_text(oldf)
-            if overwrite or oldf is None or (hasattr(oldf, "text") and not getattr(oldf, "text")):
+            if (
+                overwrite
+                or oldf is None
+                or (hasattr(oldf, "text") and not getattr(oldf, "text"))
+            ):
                 cls = type(srcf)
                 if hasattr(srcf, "text"):
                     dst.setall(fid, [cls(encoding=3, text=srcf.text)])
@@ -99,8 +127,11 @@ def copy_frames(src: ID3, dst: ID3, overwrite: bool):
                 changes[fid] = (oldv, frame_text(srcf))
     return changes
 
+
 def main():
-    ap = argparse.ArgumentParser(description="Sync MP3 tags from full tracks to '(Vocals)' acapellas by filename (handles leading numbers).")
+    ap = argparse.ArgumentParser(
+        description="Sync MP3 tags from full tracks to '(Vocals)' acapellas by filename (handles leading numbers)."
+    )
     ap.add_argument("full_dir")
     ap.add_argument("acapella_dir")
     ap.add_argument("--overwrite", action="store_true")
@@ -108,7 +139,7 @@ def main():
     args = ap.parse_args()
 
     full_dir = Path(args.full_dir)
-    aca_dir  = Path(args.acapella_dir)
+    aca_dir = Path(args.acapella_dir)
 
     # Build index of full tracks
     full_index: Dict[str, Path] = {}
@@ -150,8 +181,11 @@ def main():
     if args.dry_run:
         print("  (dry-run: nothing written)")
 
+
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("Usage: python sync_mp3_tags_by_filename_numbers.py <full_dir> <acapella_dir> [--overwrite] [--dry-run]")
+        print(
+            "Usage: python sync_mp3_tags_by_filename_numbers.py <full_dir> <acapella_dir> [--overwrite] [--dry-run]"
+        )
         sys.exit(1)
     main()

@@ -110,14 +110,19 @@ def test_create_playlists_end_to_end(monkeypatch):
     created_playlists = []
 
     def mock_create(user_id, name, public, description):
-        pl = {"uri": f"pl:{len(created_playlists)}", "external_urls": {"spotify": "http://x"}}
+        pl = {
+            "uri": f"pl:{len(created_playlists)}",
+            "external_urls": {"spotify": "http://x"},
+        }
         created_playlists.append({"name": name, "description": description})
         return pl
 
     client.user_playlist_create.side_effect = mock_create
 
     release_dates = {"t1": "2020-01-01", "t2": "2020-01-02", "t3": "2020-01-03"}
-    monkeypatch.setattr(m, "fetch_track_release_date", lambda c, uri: release_dates[uri])
+    monkeypatch.setattr(
+        m, "fetch_track_release_date", lambda c, uri: release_dates[uri]
+    )
 
     m.create_playlists(client, "My Label", ["t1", "t2", "t3"], step_size=2)
 

@@ -6,10 +6,10 @@ from crate_digger.constants import LOGGING_DATEFMT, LOGGING_FMT
 
 def get_logger(name: str = "crate_digger") -> logging.Logger:
     """Create or retrieve a configured logger instance.
-    
+
     Args:
         name: Logger name (default: 'crate_digger')
-        
+
     Returns:
         Configured logger instance with StreamHandler
     """
@@ -19,9 +19,7 @@ def get_logger(name: str = "crate_digger") -> logging.Logger:
     if not logger.hasHandlers():
         handler = logging.StreamHandler(sys.stdout)
         formatter = logging.Formatter(
-            fmt=LOGGING_FMT,
-            datefmt=LOGGING_DATEFMT,
-            style="{"
+            fmt=LOGGING_FMT, datefmt=LOGGING_DATEFMT, style="{"
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)

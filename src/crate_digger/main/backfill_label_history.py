@@ -4,7 +4,7 @@ from crate_digger.utils.spotify import (
     get_spotify_client,
     fetch_all_release_uris,
     collect_tracks_from_albums,
-    create_playlists
+    create_playlists,
 )
 
 

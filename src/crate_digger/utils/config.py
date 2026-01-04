@@ -27,12 +27,12 @@ class AppConfig(TypedDict):
 
 def _require_keys(section: Dict, required: List[str], section_name: str) -> None:
     """Validate that all required keys are present in a config section.
-    
+
     Args:
         section: Config section dict
         required: List of required key names
         section_name: Section name for error messages
-        
+
     Raises:
         ValueError: If any required keys are missing
     """
@@ -43,15 +43,15 @@ def _require_keys(section: Dict, required: List[str], section_name: str) -> None
 
 def _assert_str(value: object, key: str, section_name: str) -> str:
     """Assert that a config value is a string.
-    
+
     Args:
         value: Config value to check
         key: Config key name
         section_name: Section name for error messages
-        
+
     Returns:
         The value cast to str
-        
+
     Raises:
         ValueError: If value is not a string
     """
@@ -62,15 +62,15 @@ def _assert_str(value: object, key: str, section_name: str) -> str:
 
 def _validate_list_of_strings(value: object, key: str, section_name: str) -> List[str]:
     """Validate that a config value is a list of strings.
-    
+
     Args:
         value: Config value to check
         key: Config key name
         section_name: Section name for error messages
-        
+
     Returns:
         The value cast to List[str]
-        
+
     Raises:
         ValueError: If value is not a list of strings
     """
@@ -91,13 +91,21 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
     spotify_section = raw["spotify"]
     labels_section = raw["labels"]
 
-    _require_keys(spotify_section, ["to-listen-playlist", "test-playlist", "scopes"], "spotify")
+    _require_keys(
+        spotify_section, ["to-listen-playlist", "test-playlist", "scopes"], "spotify"
+    )
     _require_keys(labels_section, ["names"], "labels")
 
     spotify_cfg: SpotifyConfig = {
-        "to_listen_playlist": _assert_str(spotify_section["to-listen-playlist"], "to-listen-playlist", "spotify"),
-        "test_playlist": _assert_str(spotify_section["test-playlist"], "test-playlist", "spotify"),
-        "scopes": _validate_list_of_strings(spotify_section["scopes"], "scopes", "spotify"),
+        "to_listen_playlist": _assert_str(
+            spotify_section["to-listen-playlist"], "to-listen-playlist", "spotify"
+        ),
+        "test_playlist": _assert_str(
+            spotify_section["test-playlist"], "test-playlist", "spotify"
+        ),
+        "scopes": _validate_list_of_strings(
+            spotify_section["scopes"], "scopes", "spotify"
+        ),
     }
 
     labels_cfg: LabelsConfig = {

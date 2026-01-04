@@ -1,12 +1,17 @@
-from unittest.mock import MagicMock
-from types import SimpleNamespace
-
 import pandas as pd
+
+from unittest.mock import MagicMock
+
+from types import SimpleNamespace
+from typing import List, cast
+
 import crate_digger.utils.spotify as m
+from crate_digger.utils.types import SpotifyAlbum
 
 
 class FakeDate:
     """Patchable replacement for datetime.date used in the module (it imports `date` directly)."""
+
     _today = None
 
     @classmethod
@@ -27,21 +32,37 @@ def _mk_track(name, artists, uri, album_name="Album"):
 
 def test_filter_yesterdays_releases_filters_correctly(monkeypatch):
     # given: today is 2026-01-03 -> yesterday is 2026-01-02
-    FakeDate._today = SimpleNamespace(isoformat=lambda: "2026-01-03")  # minimal stub for .isoformat()
+    FakeDate._today = SimpleNamespace(
+        isoformat=lambda: "2026-01-03"
+    )  # minimal stub for .isoformat()
     # We need .today() returning something with isoformat(); timedelta(days=1) will be applied to it in your code
     # so we patch the module's date with a *real* date-like object instead:
     import datetime as _dt
+
     class _RealFakeDate(_dt.date):
         @classmethod
         def today(cls):
             return cls(2026, 1, 3)
+
     monkeypatch.setattr(m, "date", _RealFakeDate)
 
-    releases = [
-        {"release_date": "2026-01-02", "uri": "a"},
-        {"release_date": "2026-01-01", "uri": "b"},
-        {"release_date": "2026-01-02", "uri": "c"},
-    ]
+    releases = cast(
+        List[SpotifyAlbum],
+        [
+            {
+                "release_date": "2026-01-02",
+                "uri": "a",
+            },
+            {
+                "release_date": "2026-01-01",
+                "uri": "b",
+            },
+            {
+                "release_date": "2026-01-02",
+                "uri": "c",
+            },
+        ],
+    )
 
     out = m.filter_yesterdays_releases(releases)
     assert [r["uri"] for r in out] == ["a", "c"]
@@ -121,7 +142,7 @@ def test_parse_releases_drops_columns_dedupes_and_sorts():
         },
     ]
 
-    df = m.parse_releases(releases)
+    df = m.parse_releases(cast(List[SpotifyAlbum], releases))
 
     assert list(df["uri"]) == ["u1", "u2"]  # dedup + sorted by release_date
     assert "artists" not in df.columns
@@ -133,11 +154,42 @@ def test_parse_releases_drops_columns_dedupes_and_sorts():
 def test_filter_exact_label_releases_batches_and_filters():
     client = MagicMock()
 
-    releases = [{"uri": f"uri:{i}"} for i in range(25)]
+    releases = cast(
+        List[SpotifyAlbum],
+        [
+            {
+                "uri": f"uri:{i}",
+                "name": f"Album {i}",
+                "label": "Label",
+                "release_date": "2020-01-01",
+            }
+            for i in range(25)
+        ],
+    )
     # albums() called twice: first batch 20, second batch 5
     client.albums.side_effect = [
-        {"albums": [{"uri": f"uri:{i}", "label": "Good"} for i in range(20)]},
-        {"albums": [{"uri": f"uri:{i}", "label": "Bad" if i % 2 else "Good"} for i in range(20, 25)]},
+        {
+            "albums": [
+                {
+                    "uri": f"uri:{i}",
+                    "label": "Good",
+                    "name": f"Album {i}",
+                    "release_date": "2020-01-01",
+                }
+                for i in range(20)
+            ]
+        },
+        {
+            "albums": [
+                {
+                    "uri": f"uri:{i}",
+                    "label": "Bad" if i % 2 else "Good",
+                    "name": f"Album {i}",
+                    "release_date": "2020-01-01",
+                }
+                for i in range(20, 25)
+            ]
+        },
     ]
 
     out = m.filter_exact_label_releases(client, releases, "Good")
@@ -153,8 +205,8 @@ def test_filter_exact_label_releases_batches_and_filters():
 
 def test_extract_track_uris_extracts_uri():
     tracks = [
-        {"uri": "u1"},
-        {"uri": "u2"},
+        _mk_track("Track 1", ["Artist"], "u1"),
+        _mk_track("Track 2", ["Artist"], "u2"),
     ]
     assert m.extract_track_uris(tracks) == ["u1", "u2"]
 
@@ -171,10 +223,12 @@ def test_add_to_playlist_calls_playlist_add_items():
 def test_fetch_all_releases_paginates_within_year(monkeypatch):
     # limit loop to year=1990 only
     import datetime as _dt
+
     class _RealFakeDate(_dt.date):
         @classmethod
         def today(cls):
             return cls(1990, 6, 1)
+
     monkeypatch.setattr(m, "date", _RealFakeDate)
 
     client = MagicMock()
@@ -191,7 +245,9 @@ def test_fetch_all_releases_paginates_within_year(monkeypatch):
 
     # query should remove apostrophes
     q0 = client.search.call_args_list[0].args[0]
-    assert "Label s Name".replace(" ", "") not in q0  # just sanity; exact string depends on spacing
+    assert (
+        "Label s Name".replace(" ", "") not in q0
+    )  # just sanity; exact string depends on spacing
     assert "label:" in q0
     assert "year:1990" in q0
 
@@ -206,23 +262,29 @@ def test_collect_tracks_from_albums_filters_extended():
         "albums": [
             {
                 "label": "Good",
-                "tracks": {"items": [
-                    {"name": "Song", "uri": "t1"},
-                    {"name": "Song (Extended Mix)", "uri": "t2"},
-                ]},
+                "tracks": {
+                    "items": [
+                        {"name": "Song", "uri": "t1"},
+                        {"name": "Song (Extended Mix)", "uri": "t2"},
+                    ]
+                },
             },
             {
                 "label": "Bad",
-                "tracks": {"items": [
-                    {"name": "Nope", "uri": "x"},
-                ]},
+                "tracks": {
+                    "items": [
+                        {"name": "Nope", "uri": "x"},
+                    ]
+                },
             },
             {
                 "label": "Good",
-                "tracks": {"items": [
-                    {"name": "Banger - Extended", "uri": "t3"},
-                    {"name": "Banger", "uri": "t4"},
-                ]},
+                "tracks": {
+                    "items": [
+                        {"name": "Banger - Extended", "uri": "t3"},
+                        {"name": "Banger", "uri": "t4"},
+                    ]
+                },
             },
         ]
     }
@@ -244,8 +306,9 @@ def test_create_playlists_creates_multiple_and_adds_tracks(monkeypatch):
 
     # make user_playlist_create return unique playlist uris
     created = []
+
     def _create(user_id, name, public, description):
-        pl_uri = f"pl:{len(created)+1}"
+        pl_uri = f"pl:{len(created) + 1}"
         created.append({"name": name, "description": description, "uri": pl_uri})
         return {"external_urls": {"spotify": "http://x"}, "uri": pl_uri}
 
@@ -259,7 +322,9 @@ def test_create_playlists_creates_multiple_and_adds_tracks(monkeypatch):
         "t4": "2020-01-04",
         "t5": "2020-01-05",
     }
-    monkeypatch.setattr(m, "fetch_track_release_date", lambda c, uri: release_dates[uri])
+    monkeypatch.setattr(
+        m, "fetch_track_release_date", lambda c, uri: release_dates[uri]
+    )
 
     tracks = ["t1", "t2", "t3", "t4", "t5"]
     m.create_playlists(client, "My Playlist", tracks, step_size=2)
@@ -284,28 +349,59 @@ def test_create_playlists_creates_multiple_and_adds_tracks(monkeypatch):
 def test_fetch_new_relevant_releases_pipeline_calls_substeps(monkeypatch):
     client = MagicMock()
 
-    monkeypatch.setattr(m, "fetch_new_releases", MagicMock(return_value=[{"uri": "a"}]))
-    monkeypatch.setattr(m, "filter_yesterdays_releases", MagicMock(return_value=[{"uri": "a"}]))
-    monkeypatch.setattr(m, "filter_exact_label_releases", MagicMock(return_value=[{"uri": "a", "label": "L"}]))
+    mock_fetch = MagicMock(
+        return_value=[
+            {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
+        ]
+    )
+    mock_filter_yesterday = MagicMock(
+        return_value=[
+            {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
+        ]
+    )
+    mock_filter_exact = MagicMock(
+        return_value=[
+            {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
+        ]
+    )
+
+    monkeypatch.setattr(m, "fetch_new_releases", mock_fetch)
+    monkeypatch.setattr(m, "filter_yesterdays_releases", mock_filter_yesterday)
+    monkeypatch.setattr(m, "filter_exact_label_releases", mock_filter_exact)
 
     out = m.fetch_new_relevant_releases(client, "L")
-    assert out == [{"uri": "a", "label": "L"}]
+    assert out == [
+        {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
+    ]
 
-    m.fetch_new_releases.assert_called_once()
-    m.filter_yesterdays_releases.assert_called_once()
-    m.filter_exact_label_releases.assert_called_once()
+    mock_fetch.assert_called_once()
+    mock_filter_yesterday.assert_called_once()
+    mock_filter_exact.assert_called_once()
 
 
 def test_fetch_and_add_deduplicates_tracks_before_adding(monkeypatch):
     client = MagicMock()
 
     # 1 label with 1 relevant release
-    monkeypatch.setattr(m, "fetch_new_relevant_releases", lambda c, label: [{"uri": "album:1", "name": "Album1"}])
+    monkeypatch.setattr(
+        m,
+        "fetch_new_relevant_releases",
+        lambda c, label: [
+            {
+                "uri": "album:1",
+                "name": "Album1",
+                "label": "L",
+                "release_date": "2020-01-01",
+            }
+        ],
+    )
 
     # album_tracks includes duplicates (same name+artists)
     album_tracks = [
         _mk_track("Same", ["A"], "u1", album_name="Album1"),
-        _mk_track("Same", ["A"], "u2", album_name="Album1"),  # duplicate by key, should be dropped
+        _mk_track(
+            "Same", ["A"], "u2", album_name="Album1"
+        ),  # duplicate by key, should be dropped
         _mk_track("Other", ["A"], "u3", album_name="Album1"),
     ]
     monkeypatch.setattr(m, "fetch_album_tracks", lambda c, album: album_tracks)
@@ -335,7 +431,18 @@ def test_fetch_and_add_track_info_is_grouped_per_album(monkeypatch):
     Current code sets only one album key based on the last `track` variable.
     """
     client = MagicMock()
-    monkeypatch.setattr(m, "fetch_new_relevant_releases", lambda c, label: [{"uri": "album:1", "name": "Album1"}])
+    monkeypatch.setattr(
+        m,
+        "fetch_new_relevant_releases",
+        lambda c, label: [
+            {
+                "uri": "album:1",
+                "name": "Album1",
+                "label": "L",
+                "release_date": "2020-01-01",
+            }
+        ],
+    )
 
     album_tracks = [
         _mk_track("A", ["X"], "u1", album_name="Album1"),

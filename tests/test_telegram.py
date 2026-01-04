@@ -16,7 +16,7 @@ def _mk_track(name, artist, uri):
 
 
 def test_construct_message():
-    expected_message =  textwrap.dedent(
+    expected_message = textwrap.dedent(
         """\
         ❗*NEW RELEASES*❗
 
@@ -32,7 +32,8 @@ def test_construct_message():
         🎤 COOL LABEL
 
         💿 Warm EP
-        """)
+        """
+    )
 
     notification_content = {
         "Good Label": {
@@ -42,20 +43,19 @@ def test_construct_message():
             ],
             "Amazing EP": [
                 _mk_track("Song As Well", "Someone As Well", "uri:3"),
-            ]
+            ],
         },
         "Cool Label": {
             "Warm EP": [
                 _mk_track("Warm", "Somebody", "uri:4"),
                 _mk_track("Warm - DJ Person Remix", "Somebody", "uri:5"),
             ]
-        }
+        },
     }
 
     msg = construct_message(notification_content)
 
     assert msg == expected_message
-
 
 
 def test_construct_message_single_label_single_album():
@@ -123,7 +123,9 @@ def test_send_message_success(mock_post):
 @patch("crate_digger.utils.telegram.requests.post")
 def test_send_message_handles_failure(mock_post):
     resp = Mock()
-    resp.raise_for_status.side_effect = requests.HTTPError("400 Client Error: Bad Request")
+    resp.raise_for_status.side_effect = requests.HTTPError(
+        "400 Client Error: Bad Request"
+    )
     resp.status_code = 400
     resp.text = "Bad Request"
 

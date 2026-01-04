@@ -7,9 +7,7 @@ config = get_settings()
 sp = get_spotify_client("playlist-modify-private")
 
 track_info_to_send = fetch_and_add(
-    sp,
-    config["labels"]["names"],
-    config["spotify"]["to_listen_playlist"]
+    sp, config["labels"]["names"], config["spotify"]["to_listen_playlist"]
 )
 
 if track_info_to_send:
