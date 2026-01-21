@@ -119,7 +119,7 @@ uv run python -m crate_digger.main.backfill_label_history "Hot Creations"
 uv run python -m crate_digger.main.fetch_new_releases
 ```
 
-- Fetches releases from all configured labels for yesterday
+- Fetches releases from all configured labels for past week
 - Deduplicates and removes extended versions
 - Adds unique tracks to your "to-listen" playlist
 - Sends Telegram notification with results

@@ -30,10 +30,9 @@ def _mk_track(name, artists, uri, album_name="Album"):
     }
 
 
-def test_filter_yesterdays_releases_filters_correctly(monkeypatch):
-    # given: today is 2026-01-03 -> yesterday is 2026-01-02
+def test_filter_past_week_releases_filters_correctly(monkeypatch):
     FakeDate._today = SimpleNamespace(
-        isoformat=lambda: "2026-01-03"
+        isoformat=lambda: "2026-01-21"
     )  # minimal stub for .isoformat()
     # We need .today() returning something with isoformat(); timedelta(days=1) will be applied to it in your code
     # so we patch the module's date with a *real* date-like object instead:
@@ -42,7 +41,7 @@ def test_filter_yesterdays_releases_filters_correctly(monkeypatch):
     class _RealFakeDate(_dt.date):
         @classmethod
         def today(cls):
-            return cls(2026, 1, 3)
+            return cls(2026, 1, 21)
 
     monkeypatch.setattr(m, "date", _RealFakeDate)
 
@@ -50,21 +49,21 @@ def test_filter_yesterdays_releases_filters_correctly(monkeypatch):
         List[SpotifyAlbum],
         [
             {
-                "release_date": "2026-01-02",
+                "release_date": "2026-01-20",
                 "uri": "a",
             },
             {
-                "release_date": "2026-01-01",
+                "release_date": "2026-01-13",
                 "uri": "b",
             },
             {
-                "release_date": "2026-01-02",
+                "release_date": "2026-01-14",
                 "uri": "c",
             },
         ],
     )
 
-    out = m.filter_yesterdays_releases(releases)
+    out = m.filter_releases_by_date(releases)
     assert [r["uri"] for r in out] == ["a", "c"]
 
 
@@ -354,7 +353,7 @@ def test_fetch_new_relevant_releases_pipeline_calls_substeps(monkeypatch):
             {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
         ]
     )
-    mock_filter_yesterday = MagicMock(
+    mock_filter_releases_by_date = MagicMock(
         return_value=[
             {"uri": "a", "name": "Album", "label": "L", "release_date": "2020-01-01"}
         ]
@@ -366,7 +365,7 @@ def test_fetch_new_relevant_releases_pipeline_calls_substeps(monkeypatch):
     )
 
     monkeypatch.setattr(m, "fetch_new_releases", mock_fetch)
-    monkeypatch.setattr(m, "filter_yesterdays_releases", mock_filter_yesterday)
+    monkeypatch.setattr(m, "filter_releases_by_date", mock_filter_releases_by_date)
     monkeypatch.setattr(m, "filter_exact_label_releases", mock_filter_exact)
 
     out = m.fetch_new_relevant_releases(client, "L")
@@ -375,7 +374,7 @@ def test_fetch_new_relevant_releases_pipeline_calls_substeps(monkeypatch):
     ]
 
     mock_fetch.assert_called_once()
-    mock_filter_yesterday.assert_called_once()
+    mock_filter_releases_by_date.assert_called_once()
     mock_filter_exact.assert_called_once()
 
 
