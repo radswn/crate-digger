@@ -4,6 +4,7 @@
 .env
 .python-version
 *.egg-info/
+build/
 
 notebooks/
 *.ipynb
