@@ -35,7 +35,7 @@ def get_spotify_client(scope: str) -> Spotify:
     load_dotenv()
 
     project_root = Path(__file__).resolve().parents[3]
-    cache_path = project_root / ".spotipy_cache" / f".cache-{scope}"
+    cache_path = project_root / ".spotipy_cache" / f".cache-{scope.replace(',', '_')}"
 
     cache_handler = CacheFileHandler(cache_path=cache_path)
     auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
