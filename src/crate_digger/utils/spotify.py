@@ -50,7 +50,7 @@ def fetch_and_add(
     record_labels: List[str],
     target_playlist: str,
 ) -> Dict[str, Dict[str, List[SpotifyTrack]]]:
-    """Fetch past week releases from labels, deduplicate, and add to playlist.
+    """Fetch past day releases from labels, deduplicate, and add to playlist.
 
     Args:
         client: Authenticated Spotify client
@@ -86,7 +86,7 @@ def fetch_and_add(
 
 
 def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
-    """Fetch past week releases from a label with exact label name matching.
+    """Fetch past day releases from a label with exact label name matching.
 
     Args:
         client: Authenticated Spotify client
@@ -96,8 +96,8 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbu
         List of album objects released within the past week with exact label match
     """
     new_releases = fetch_new_releases(client, label)
-    past_week_releases = filter_releases_by_date(new_releases)
-    relevant_releases = filter_exact_label_releases(client, past_week_releases, label)
+    yesterdays_releases = filter_releases_by_date(new_releases, n_days=1)
+    relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
 
     n_releases = len(relevant_releases)
     logger.info(
