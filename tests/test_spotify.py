@@ -63,8 +63,8 @@ def test_filter_past_week_releases_filters_correctly(monkeypatch):
         ],
     )
 
-    out = m.filter_releases_by_date(releases)
-    assert [r["uri"] for r in out] == ["a", "c"]
+    out = m.filter_releases_by_date(releases, n_days=1)
+    assert [r["uri"] for r in out] == ["a"]
 
 
 def test_remove_extended_versions_prefers_original_when_present():

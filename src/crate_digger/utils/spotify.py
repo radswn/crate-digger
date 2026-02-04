@@ -93,7 +93,7 @@ def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbu
         label: Record label name to search for
 
     Returns:
-        List of album objects released within the past week with exact label match
+        List of album objects released exactly n days ago with exact label match
     """
     new_releases = fetch_new_releases(client, label)
     yesterdays_releases = filter_releases_by_date(new_releases, n_days=1)
@@ -133,16 +133,16 @@ def batch(iterable: Sequence[str], size: int) -> Iterable[Sequence[str]]:
 def filter_releases_by_date(
     releases: List[SpotifyAlbum], n_days: int = 7
 ) -> List[SpotifyAlbum]:
-    """Filter releases to only those with release dates within the past n days.
+    """Filter releases to only those with release dates exactly n days ago.
 
     Args:
         releases: List of Spotify album objects
 
     Returns:
-        Filtered list containing only releases within the past n days
+        Filtered list containing only releases exactly n days ago
     """
     target_date = date.today() - timedelta(days=n_days)
-    return [r for r in releases if date.fromisoformat(r["release_date"]) >= target_date]
+    return [r for r in releases if date.fromisoformat(r["release_date"]) == target_date]
 
 
 def filter_exact_label_releases(
