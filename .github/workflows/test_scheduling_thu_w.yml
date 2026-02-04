@@ -2,7 +2,7 @@ name: Test Scheduling Thu
 
 on:
   schedule:
-    - cron: '* * * * 4'
+    - cron: '0 * * * 4'
   workflow_dispatch:
 
 jobs:

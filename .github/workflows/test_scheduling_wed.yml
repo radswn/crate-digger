@@ -2,7 +2,7 @@ name: Test Scheduling Wed
 
 on:
   schedule:
-    - cron: '* * * * 3'
+    - cron: '0 * * * 3'
 
 jobs:
   echo:
