@@ -1,0 +1,14 @@
+name: Test Scheduling Wed
+
+on:
+  schedule:
+    - cron: '* * * * 3'
+
+jobs:
+  echo:
+    name: Echo Job
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Echo a message
+        run: echo "This should run on Wednesdays."

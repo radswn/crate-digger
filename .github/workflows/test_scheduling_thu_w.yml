@@ -1,0 +1,15 @@
+name: Test Scheduling Thu
+
+on:
+  schedule:
+    - cron: '* * * * 4'
+  workflow_dispatch:
+
+jobs:
+  echo:
+    name: Echo Job
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Echo a message
+        run: echo "This should run on Thursdays and when manually triggered."
