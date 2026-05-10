@@ -9,18 +9,12 @@ class SpotifyConfig(TypedDict):
 
     to_listen_playlist: str
     test_playlist: str
+    followed_labels_playlist: str
     scopes: List[str]
-
-
-class LabelsConfig(TypedDict):
-    """Expected structure of the `[labels]` section."""
-
-    names: List[str]
 
 
 class AppConfig(TypedDict):
     spotify: SpotifyConfig
-    labels: LabelsConfig
 
 
 def _require_keys(section: Dict, required: List[str], section_name: str) -> None:
@@ -83,16 +77,16 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
     with open(config_path, "rb") as f:
         raw = tomllib.load(f)
 
-    if "spotify" not in raw or "labels" not in raw:
-        raise ValueError("Config must contain [spotify] and [labels] sections")
+    if "spotify" not in raw:
+        raise ValueError("Config must contain [spotify] section")
 
     spotify_section = raw["spotify"]
-    labels_section = raw["labels"]
 
     _require_keys(
-        spotify_section, ["to-listen-playlist", "test-playlist", "scopes"], "spotify"
+        spotify_section,
+        ["to-listen-playlist", "test-playlist", "followed-labels-playlist", "scopes"],
+        "spotify",
     )
-    _require_keys(labels_section, ["names"], "labels")
 
     spotify_cfg: SpotifyConfig = {
         "to_listen_playlist": _assert_str(
@@ -101,16 +95,17 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
         "test_playlist": _assert_str(
             spotify_section["test-playlist"], "test-playlist", "spotify"
         ),
+        "followed_labels_playlist": _assert_str(
+            spotify_section["followed-labels-playlist"],
+            "followed-labels-playlist",
+            "spotify",
+        ),
         "scopes": _validate_list_of_strings(
             spotify_section["scopes"], "scopes", "spotify"
         ),
     }
 
-    labels_cfg: LabelsConfig = {
-        "names": _validate_list_of_strings(labels_section["names"], "names", "labels"),
-    }
-
-    return {"spotify": spotify_cfg, "labels": labels_cfg}
+    return {"spotify": spotify_cfg}
 
 
 @lru_cache(maxsize=1)

@@ -1,4 +1,5 @@
 import re
+import time
 
 import pandas as pd
 
@@ -11,6 +12,7 @@ from spotipy import Spotify
 from spotipy.oauth2 import CacheFileHandler, SpotifyOAuth
 
 from crate_digger.constants import (
+    BACKFILL_REQUEST_DELAY_SECONDS,
     BACKFILL_START_YEAR,
     FETCH_BATCH_SIZE,
     MAX_OFFSET,
@@ -21,6 +23,13 @@ from crate_digger.utils.types import SpotifyAlbum, SpotifyTrack
 
 
 logger = get_logger(__name__)
+
+
+def sleep_between_requests(delay_seconds: float) -> None:
+    """Pause between API calls during broad backfills."""
+
+    if delay_seconds > 0:
+        time.sleep(delay_seconds)
 
 
 def get_spotify_client(scope: str) -> Spotify:
@@ -43,6 +52,71 @@ def get_spotify_client(scope: str) -> Spotify:
 
     logger.info(f"Instantiated Spotipy client for scope {scope}")
     return sp
+
+
+def fetch_followed_labels_from_playlist(
+    client: Spotify, playlist_uri: str
+) -> List[str]:
+    """Read followed record labels from a Spotify playlist of representative tracks.
+
+    The playlist should contain at least one track released by each label to follow.
+    Spotify playlist track payloads do not include full album label metadata, so this
+    fetches album details in batches and deduplicates labels in playlist order.
+    """
+
+    if not playlist_uri.strip():
+        raise ValueError("Set [spotify].followed-labels-playlist in config.toml")
+
+    album_uris = fetch_playlist_album_uris(client, playlist_uri)
+    labels: List[str] = []
+    seen_labels: set[str] = set()
+
+    for uris_chunk in batch(album_uris, FETCH_BATCH_SIZE):
+        full_albums = client.albums(uris_chunk)["albums"]
+        for album in full_albums:
+            label = album.get("label")
+            if not label or label in seen_labels:
+                continue
+            seen_labels.add(label)
+            labels.append(label)
+
+    logger.info(f"Fetched {len(labels)} followed {pluralize(len(labels), 'label')}")
+    return labels
+
+
+def fetch_playlist_album_uris(client: Spotify, playlist_uri: str) -> List[str]:
+    """Fetch unique album URIs for tracks in a playlist, preserving playlist order."""
+
+    album_uris: List[str] = []
+    seen_album_uris: set[str] = set()
+    offset = 0
+    limit = 100
+
+    while True:
+        page = client.playlist_items(
+            playlist_uri,
+            fields="items(track(album(uri))),next",
+            limit=limit,
+            offset=offset,
+            additional_types=("track",),
+        )
+        items = page["items"]
+
+        for item in items:
+            track = item.get("track") or {}
+            album = track.get("album") or {}
+            album_uri = album.get("uri")
+            if not album_uri or album_uri in seen_album_uris:
+                continue
+            seen_album_uris.add(album_uri)
+            album_uris.append(album_uri)
+
+        if not page.get("next"):
+            break
+
+        offset += limit
+
+    return album_uris
 
 
 def fetch_and_add(
@@ -308,7 +382,11 @@ def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) ->
     return snapshot_id
 
 
-def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
+def fetch_all_releases(
+    client: Spotify,
+    label: str,
+    request_delay_seconds: float = BACKFILL_REQUEST_DELAY_SECONDS,
+) -> List[SpotifyAlbum]:
     """Fetch all releases for a label from BACKFILL_START_YEAR to present.
 
     Args:
@@ -332,6 +410,7 @@ def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
             offset=offset,
             limit=SEARCH_LIMIT,
         )["albums"]["items"]
+        sleep_between_requests(request_delay_seconds)
 
         while page_of_found_releases:
             releases.extend(page_of_found_releases)
@@ -346,6 +425,7 @@ def fetch_all_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
                 offset=offset,
                 limit=SEARCH_LIMIT,
             )["albums"]["items"]
+            sleep_between_requests(request_delay_seconds)
         len_end = len(releases)
         if len_end != len_beginning:
             logger.info(
@@ -368,10 +448,16 @@ def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
     """
     release_df = pd.DataFrame(releases)
 
+    if release_df.empty:
+        logger.info("0 releases left")
+        return pd.DataFrame(columns=pd.Index(["uri", "release_date"]))
+
     size_beginning = release_df.shape[0]
 
     release_df = release_df.drop(
-        ["artists", "images", "available_markets", "external_urls"], axis=1
+        ["artists", "images", "available_markets", "external_urls"],
+        axis=1,
+        errors="ignore",
     )
 
     release_df = release_df.drop_duplicates(["uri"])
@@ -390,7 +476,11 @@ def parse_releases(releases: List[SpotifyAlbum]) -> pd.DataFrame:
     return release_df
 
 
-def fetch_all_release_uris(client: Spotify, label: str) -> pd.Series:
+def fetch_all_release_uris(
+    client: Spotify,
+    label: str,
+    request_delay_seconds: float = BACKFILL_REQUEST_DELAY_SECONDS,
+) -> pd.Series:
     """Fetch and parse all release URIs for a label.
 
     Args:
@@ -400,14 +490,17 @@ def fetch_all_release_uris(client: Spotify, label: str) -> pd.Series:
     Returns:
         Series of release URIs
     """
-    all_releases = fetch_all_releases(client, label)
+    all_releases = fetch_all_releases(client, label, request_delay_seconds)
     parsed_df = parse_releases(all_releases)
     release_uris = parsed_df.uri
     return release_uris
 
 
 def collect_tracks_from_albums(
-    client: Spotify, album_uris: pd.Series, label: str
+    client: Spotify,
+    album_uris: pd.Series,
+    label: str,
+    request_delay_seconds: float = BACKFILL_REQUEST_DELAY_SECONDS,
 ) -> List[str]:
     """Collect all track URIs from albums, filtering extended versions.
 
@@ -426,6 +519,7 @@ def collect_tracks_from_albums(
         album_batch = [
             a for a in client.albums(uris_batch)["albums"] if a["label"] == label
         ]
+        sleep_between_requests(request_delay_seconds)
 
         for album in album_batch:
             album_tracks = album["tracks"]["items"]
@@ -444,7 +538,11 @@ def collect_tracks_from_albums(
 
 
 def create_playlists(
-    client: Spotify, playlist_name: str, track_uris: List[str], step_size: int = 50
+    client: Spotify,
+    playlist_name: str,
+    track_uris: List[str],
+    step_size: int = 50,
+    request_delay_seconds: float = BACKFILL_REQUEST_DELAY_SECONDS,
 ) -> None:
     """Create numbered playlists with batches of tracks and date range descriptions.
 
@@ -476,6 +574,27 @@ def create_playlists(
         )
 
         client.playlist_add_items(playlist["uri"], track_uris[i : i + step_size])
+        sleep_between_requests(request_delay_seconds)
+
+
+def backfill_label_history(
+    client: Spotify,
+    label: str,
+    request_delay_seconds: float = BACKFILL_REQUEST_DELAY_SECONDS,
+) -> List[str]:
+    """Backfill all known tracks for a label into numbered Spotify playlists."""
+
+    release_uris = fetch_all_release_uris(client, label, request_delay_seconds)
+    uris_to_add = collect_tracks_from_albums(
+        client, release_uris, label, request_delay_seconds
+    )
+
+    if uris_to_add:
+        create_playlists(
+            client, label, uris_to_add, request_delay_seconds=request_delay_seconds
+        )
+
+    return uris_to_add
 
 
 def fetch_track_release_date(client: Spotify, track_uri: str) -> str:

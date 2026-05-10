@@ -1,10 +1,10 @@
 import os
 import requests
 
-from typing import Dict, List
+from typing import Dict, List, Sequence
 
 from crate_digger.utils.markdownv2 import bold, escape_markdown_v2
-from crate_digger.utils.logging import get_logger
+from crate_digger.utils.logging import get_logger, pluralize
 from crate_digger.utils.types import SpotifyTrack
 
 
@@ -35,30 +35,54 @@ def send_message(message: str) -> None:
         raise
 
 
-def construct_message(releases_info: Dict[str, Dict[str, List[SpotifyTrack]]]) -> str:
-    """Construct a formatted Telegram message from release information.
+def construct_message(
+    releases_info: Dict[str, Dict[str, List[SpotifyTrack]]],
+    labels_added: Sequence[str] | None = None,
+    labels_removed: Sequence[str] | None = None,
+    labels_backfilled: Sequence[str] | None = None,
+) -> str:
+    """Construct a compact Telegram summary.
 
     Args:
         releases_info: Dict mapping labels to their releases and tracks
+        labels_added: Labels newly present in the followed-label playlist
+        labels_removed: Labels no longer present in the followed-label playlist
+        labels_backfilled: Added labels whose history was backfilled
 
     Returns:
         MarkdownV2-formatted message string
     """
-    n_tracks_found = sum(
-        [
-            len(tracks)
-            for release in releases_info.values()
-            for tracks in release.values()
-        ]
-    )
+    labels_added = labels_added or []
+    labels_removed = labels_removed or []
+    labels_backfilled = labels_backfilled or []
 
-    message_text = "❗" + bold("NEW RELEASES") + "❗" + "\n\n"
-    message_text += "🎵 FOUND " + bold(str(n_tracks_found)) + " TRACKS 🎵" + "\n"
+    n_releases_found = sum(len(releases) for releases in releases_info.values())
+    lines = [
+        bold(f"{n_releases_found} new {pluralize(n_releases_found, 'release')} found")
+    ]
 
-    for label, release_titles in releases_info.items():
-        message_text += "\n\n" + "🎤 " + escape_markdown_v2(label).upper() + "\n\n"
+    if labels_added or labels_removed:
+        change_parts = []
+        if labels_added:
+            change_parts.append(
+                f"{len(labels_added)} {pluralize(len(labels_added), 'label')} added"
+            )
+        if labels_removed:
+            change_parts.append(
+                f"{len(labels_removed)} {pluralize(len(labels_removed), 'label')} removed"
+            )
 
-        for release in release_titles.keys():
-            message_text += "💿 " + escape_markdown_v2(release) + "\n"
+        lines.append(bold("Followed labels updated: " + ", ".join(change_parts)))
 
-    return message_text
+    if labels_added:
+        lines.append("Added: " + escape_markdown_v2(", ".join(labels_added)))
+
+    if labels_removed:
+        lines.append("Removed: " + escape_markdown_v2(", ".join(labels_removed)))
+
+    if labels_backfilled:
+        lines.append(
+            "Backfilled history for " + escape_markdown_v2(", ".join(labels_backfilled))
+        )
+
+    return "\n".join(lines)

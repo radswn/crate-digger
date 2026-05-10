@@ -124,7 +124,9 @@ def test_create_playlists_end_to_end(monkeypatch):
         m, "fetch_track_release_date", lambda c, uri: release_dates[uri]
     )
 
-    m.create_playlists(client, "My Label", ["t1", "t2", "t3"], step_size=2)
+    m.create_playlists(
+        client, "My Label", ["t1", "t2", "t3"], step_size=2, request_delay_seconds=0
+    )
 
     # Created 2 playlists (2 tracks each, then 1)
     assert len(created_playlists) == 2

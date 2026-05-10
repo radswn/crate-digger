@@ -1,11 +1,7 @@
 import sys
 
-from crate_digger.utils.spotify import (
-    get_spotify_client,
-    fetch_all_release_uris,
-    collect_tracks_from_albums,
-    create_playlists,
-)
+from crate_digger.utils.config import get_settings
+from crate_digger.utils.spotify import backfill_label_history, get_spotify_client
 
 
 if len(sys.argv) < 2:
@@ -14,10 +10,7 @@ if len(sys.argv) < 2:
 
 label = " ".join(sys.argv[1:])
 
-sp = get_spotify_client("playlist-modify-private")
+config = get_settings()
+sp = get_spotify_client(" ".join(config["spotify"]["scopes"]))
 
-release_uris = fetch_all_release_uris(sp, label)
-
-uris_to_add = collect_tracks_from_albums(sp, release_uris, label)
-
-create_playlists(sp, label, uris_to_add)
+backfill_label_history(sp, label)

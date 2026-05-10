@@ -2,18 +2,23 @@ name: Fetch New Releases
 
 on:
   schedule:
-    - cron: '0 0 * * 6'
+    - cron: '15 8 * * *'
   workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
+concurrency:
+  group: fetch-releases
+  cancel-in-progress: false
+
 jobs:
   fetch-releases:
     name: Fetch New Releases
     runs-on: ubuntu-latest
     environment: gh-actions
+    timeout-minutes: 240
 
     steps:
       - name: Checkout
@@ -43,6 +48,9 @@ jobs:
       - name: Download cached tokens from S3
         run: aws s3 cp s3://radswn-spotify-auth-cache/.spotipy_cache .spotipy_cache --recursive
 
+      - name: Download followed-label state from S3
+        run: aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state .crate_digger_state --recursive || true
+
       - name: Run script for fetching new releases
         env:
           SPOTIPY_CLIENT_ID: ${{ secrets.SPOTIPY_CLIENT_ID }}
@@ -53,4 +61,9 @@ jobs:
         run: uv run python -m crate_digger.main.fetch_new_releases
 
       - name: Upload refreshed tokens back to S3
+        if: always()
         run: aws s3 cp .spotipy_cache s3://radswn-spotify-auth-cache/.spotipy_cache --recursive
+
+      - name: Upload followed-label state back to S3
+        if: always()
+        run: if [ -d .crate_digger_state ]; then aws s3 cp .crate_digger_state s3://radswn-spotify-auth-cache/.crate_digger_state --recursive; fi

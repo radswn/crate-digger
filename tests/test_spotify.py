@@ -150,6 +150,13 @@ def test_parse_releases_drops_columns_dedupes_and_sorts():
     assert "external_urls" not in df.columns
 
 
+def test_parse_releases_handles_empty_input():
+    df = m.parse_releases([])
+
+    assert list(df.columns) == ["uri", "release_date"]
+    assert df.empty
+
+
 def test_filter_exact_label_releases_batches_and_filters():
     client = MagicMock()
 
@@ -219,6 +226,66 @@ def test_add_to_playlist_calls_playlist_add_items():
     client.playlist_add_items.assert_called_once_with("playlist_id", ["u1", "u2"])
 
 
+def test_fetch_playlist_album_uris_paginates_and_dedupes():
+    client = MagicMock()
+    client.playlist_items.side_effect = [
+        {
+            "items": [
+                {"track": {"album": {"uri": "album:1"}}},
+                {"track": {"album": {"uri": "album:1"}}},
+                {"track": {"album": {"uri": "album:2"}}},
+            ],
+            "next": "next-page",
+        },
+        {
+            "items": [
+                {"track": None},
+                {"track": {"album": {"uri": "album:3"}}},
+            ],
+            "next": None,
+        },
+    ]
+
+    assert m.fetch_playlist_album_uris(client, "playlist:labels") == [
+        "album:1",
+        "album:2",
+        "album:3",
+    ]
+    assert client.playlist_items.call_count == 2
+
+
+def test_fetch_followed_labels_from_playlist_fetches_album_labels(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(
+        m,
+        "fetch_playlist_album_uris",
+        lambda c, playlist_uri: ["album:1", "album:2", "album:3"],
+    )
+    client.albums.return_value = {
+        "albums": [
+            {"label": "Good"},
+            {"label": "Good"},
+            {"label": "Other"},
+        ]
+    }
+
+    assert m.fetch_followed_labels_from_playlist(client, "playlist:labels") == [
+        "Good",
+        "Other",
+    ]
+
+
+def test_fetch_followed_labels_from_playlist_requires_configured_playlist():
+    client = MagicMock()
+
+    try:
+        m.fetch_followed_labels_from_playlist(client, "")
+    except ValueError as exc:
+        assert "followed-labels-playlist" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError")
+
+
 def test_fetch_all_releases_paginates_within_year(monkeypatch):
     # limit loop to year=1990 only
     import datetime as _dt
@@ -238,7 +305,7 @@ def test_fetch_all_releases_paginates_within_year(monkeypatch):
         {"albums": {"items": []}},
     ]
 
-    out = m.fetch_all_releases(client, "Label's Name")
+    out = m.fetch_all_releases(client, "Label's Name", request_delay_seconds=0)
     assert [r["uri"] for r in out] == ["a", "b"]
     assert client.search.call_count == 2
 
@@ -288,7 +355,9 @@ def test_collect_tracks_from_albums_filters_extended():
         ]
     }
 
-    out = m.collect_tracks_from_albums(client, album_uris, label="Good")
+    out = m.collect_tracks_from_albums(
+        client, album_uris, label="Good", request_delay_seconds=0
+    )
     assert out == ["t1", "t4"]  # only from label=Good and non-extended
 
 
@@ -326,7 +395,9 @@ def test_create_playlists_creates_multiple_and_adds_tracks(monkeypatch):
     )
 
     tracks = ["t1", "t2", "t3", "t4", "t5"]
-    m.create_playlists(client, "My Playlist", tracks, step_size=2)
+    m.create_playlists(
+        client, "My Playlist", tracks, step_size=2, request_delay_seconds=0
+    )
 
     # 5 tracks with step 2 => 3 playlists: (2,2,1)
     assert [c["name"] for c in created] == [

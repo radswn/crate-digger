@@ -1,4 +1,3 @@
-import textwrap
 import pytest
 import requests
 
@@ -16,25 +15,6 @@ def _mk_track(name, artist, uri):
 
 
 def test_construct_message():
-    expected_message = textwrap.dedent(
-        """\
-        ❗*NEW RELEASES*❗
-
-        🎵 FOUND *5* TRACKS 🎵
-
-
-        🎤 GOOD LABEL
-
-        💿 Nice Single
-        💿 Amazing EP
-
-
-        🎤 COOL LABEL
-
-        💿 Warm EP
-        """
-    )
-
     notification_content = {
         "Good Label": {
             "Nice Single": [
@@ -55,7 +35,7 @@ def test_construct_message():
 
     msg = construct_message(notification_content)
 
-    assert msg == expected_message
+    assert msg == "*3 new releases found*"
 
 
 def test_construct_message_single_label_single_album():
@@ -70,8 +50,7 @@ def test_construct_message_single_label_single_album():
 
     message = construct_message(track_info)
 
-    assert "LABEL1" in message
-    assert "Album1" in message
+    assert message == "*1 new release found*"
 
 
 def test_construct_message_multiple_labels():
@@ -82,14 +61,12 @@ def test_construct_message_multiple_labels():
 
     message = construct_message(track_info)
 
-    assert "LABEL1" in message
-    assert "LABEL2" in message
+    assert message == "*2 new releases found*"
 
 
 def test_construct_message_empty_dict():
     message = construct_message({})
-    assert isinstance(message, str)
-    assert len(message) >= 0  # Should handle empty gracefully
+    assert message == "*0 new releases found*"
 
 
 def test_construct_message_multiple_albums_per_label():
@@ -102,8 +79,22 @@ def test_construct_message_multiple_albums_per_label():
 
     message = construct_message(track_info)
 
-    assert "Album1" in message
-    assert "Album2" in message
+    assert message == "*2 new releases found*"
+
+
+def test_construct_message_includes_label_changes_and_backfills():
+    message = construct_message(
+        {},
+        labels_added=["Good Label", "Label-With-Dash"],
+        labels_removed=["Old Label"],
+        labels_backfilled=["Good Label"],
+    )
+
+    assert "*0 new releases found*" in message
+    assert "*Followed labels updated: 2 labels added, 1 label removed*" in message
+    assert "Added: Good Label, Label\\-With\\-Dash" in message
+    assert "Removed: Old Label" in message
+    assert "Backfilled history for Good Label" in message
 
 
 @patch("crate_digger.utils.telegram.requests.post")

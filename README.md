@@ -1,11 +1,12 @@
 # Crate Digger
 
-A Python application that discovers new music releases and automates Spotify playlist management. Fetches daily releases from curated record labels, deduplicates tracks, and notifies you via Telegram.
+A Python application that discovers new music releases and automates Spotify playlist management. It follows record labels represented by tracks in a Spotify playlist, deduplicates new tracks, and notifies you via Telegram.
 
 **Features:**
-- 🎵 Auto-fetch new releases daily from your favorite record labels
+- 🎵 Auto-fetch new releases daily from labels represented in a Spotify playlist
 - 🎯 Intelligent deduplication and extended version filtering
-- 📱 Telegram notifications for new additions
+- 📱 Compact Telegram summaries for new releases and followed-label changes
+- 📚 Historical backfill when a new label is added to the followed playlist
 - 🔄 Cached authentication for seamless operation
 - 🧪 Comprehensive test coverage with integration tests
 - 🛡️ Strict configuration validation with typed configs
@@ -62,20 +63,17 @@ Create or edit `config.toml`:
 [spotify]
 to-listen-playlist = "spotify:playlist:YOUR_PLAYLIST_ID"
 test-playlist = "spotify:playlist:YOUR_TEST_PLAYLIST_ID"
+followed-labels-playlist = "spotify:playlist:YOUR_FOLLOWED_LABELS_PLAYLIST_ID"
 scopes = [
     "playlist-modify-private",
     "playlist-read-private",
     "user-library-read",
 ]
-
-[labels]
-names = [
-    "Mindshake Records",
-    "Solid Grooves Records",
-    "Hot Creations",
-    # Add your favorite labels here
-]
 ```
+
+Create the followed-label playlist in Spotify and add one representative track from each label you want to follow. The app reads each track's album label metadata and deduplicates the resulting label list.
+
+On the first run, the app initializes `.crate_digger_state/followed_labels.json` from the playlist without sending added/removed notifications or backfilling every existing label. Later playlist changes are compared against that state.
 
 ### 3. Spotify Authorization
 
@@ -119,10 +117,12 @@ uv run python -m crate_digger.main.backfill_label_history "Hot Creations"
 uv run python -m crate_digger.main.fetch_new_releases
 ```
 
-- Fetches releases from all configured labels for past week
+- Fetches releases from followed labels for yesterday
 - Deduplicates and removes extended versions
 - Adds unique tracks to your "to-listen" playlist
-- Sends Telegram notification with results
+- Sends a compact Telegram summary
+- Detects labels added to or removed from the followed-label playlist
+- Backfills historical playlists for newly added labels, with a small delay between broad Spotify API calls
 
 ### Backfill History
 
@@ -156,12 +156,12 @@ uv run pytest tests/test_spotify.py
 
 - **`spotify.to-listen-playlist`** (string) – Playlist URI for daily new releases
 - **`spotify.test-playlist`** (string) – Optional test playlist
+- **`spotify.followed-labels-playlist`** (string) – Playlist URI containing one representative track per followed label
 - **`spotify.scopes`** (list of strings) – OAuth scopes required
-- **`labels.names`** (list of strings) – Record labels to monitor
 
 **Validation:**
-- Required sections: `[spotify]`, `[labels]`
-- Required keys: `to-listen-playlist`, `test-playlist`, `scopes`, `names`
+- Required sections: `[spotify]`
+- Required keys: `to-listen-playlist`, `test-playlist`, `followed-labels-playlist`, `scopes`
 - All values type-checked; helpful error messages on load failures
 
 ### Environment Variables
@@ -184,8 +184,10 @@ Create a `.env` file in the project root (already loaded via `python-dotenv`):
 The repository is configured to run daily via GitHub Actions:
 
 1. OAuth token cached in AWS S3 between runs
-2. New releases fetched every day at configured time
-3. Results posted to Telegram
+2. Followed-label state cached in AWS S3 between runs
+3. New releases fetched every day at 08:15 UTC
+4. Newly added labels backfilled into historical playlists
+5. Results posted to Telegram
 
 ### Local CI
 

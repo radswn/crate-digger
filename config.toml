@@ -1,60 +1,9 @@
 [spotify]
 to-listen-playlist = "spotify:playlist:3i2ruN3gPygSsQzcvQG9ri"
 test-playlist = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
+followed-labels-playlist = "spotify:playlist:4PT220EaTKVNwmkaKqAh4y"
 scopes = [
     "playlist-modify-private",
     "playlist-read-private",
     "user-library-read",
-]
-
-[labels]
-names = [
-    "Mindshake Records",
-    "Solid Grooves Records",
-    # "Toolroom",
-    # "Repopulate Mars",
-    # "Three Six Zero Recordings",
-    # "Defected Records",
-    "Nervous Records",
-    "Heavy House Society",
-    "Cecille Records",
-    "Deeperfect",
-    "Sound D'Elite",
-    "CircoLoco Records",
-    "Hot Creations",
-    "Up the Stuss",
-    # "Catch & Release",
-    # "Musica Gourmet",
-    "COCO",
-    "Sanity",
-    "Eastenderz",
-    "elrow Limited",
-    "Gruuv",
-    "RWorks",
-    "MOOD Collective",
-    "Mellow Circus Records",
-    "Clarisse Records",
-    "SMIILE RECORDS",
-    "Hellbent Records",
-    "KoBBoK",
-    "BANDIDOS",
-    "NoZzo Music",
-    "Ole Rec",
-    "PIV",
-    "8bit Records",
-    "Boom Boom Room",
-    "Organic Pieces",
-    "Moan",
-    "Mood Child",
-    "La Pera Records",
-    "HOTTRAX",
-    "Revival New York",
-    "BOX RED",
-    "Maccabi house",
-    "Moxy Muzik",
-    "DOSMUNDOS",
-    "elrow Music",
-    "And Dance",
-    "Hot Fuss",
-    "Black Book Records"
 ]

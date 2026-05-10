@@ -10,6 +10,7 @@ notebooks/
 *.ipynb
 
 .spotipy_cache/
+.crate_digger_state/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
