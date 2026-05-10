@@ -10,6 +10,8 @@ class SpotifyConfig(TypedDict):
     to_listen_playlist: str
     test_playlist: str
     followed_labels_playlist: str
+    to_download_playlist: str
+    acapella_playlist: str
     scopes: List[str]
 
 
@@ -84,7 +86,14 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
 
     _require_keys(
         spotify_section,
-        ["to-listen-playlist", "test-playlist", "followed-labels-playlist", "scopes"],
+        [
+            "to-listen-playlist",
+            "test-playlist",
+            "followed-labels-playlist",
+            "to-download-playlist",
+            "acapella-playlist",
+            "scopes",
+        ],
         "spotify",
     )
 
@@ -99,6 +108,12 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
             spotify_section["followed-labels-playlist"],
             "followed-labels-playlist",
             "spotify",
+        ),
+        "to_download_playlist": _assert_str(
+            spotify_section["to-download-playlist"], "to-download-playlist", "spotify"
+        ),
+        "acapella_playlist": _assert_str(
+            spotify_section["acapella-playlist"], "acapella-playlist", "spotify"
         ),
         "scopes": _validate_list_of_strings(
             spotify_section["scopes"], "scopes", "spotify"

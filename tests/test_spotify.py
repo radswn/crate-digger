@@ -296,6 +296,37 @@ def test_fetch_playlist_album_uris_paginates_and_dedupes():
     assert client.playlist_items.call_count == 2
 
 
+def test_format_track_query_joins_artists_and_title():
+    track = _mk_track("Track Name", ["Artist 1", "Artist 2"], "uri:1")
+
+    assert m.format_track_query(track) == "Artist 1, Artist 2 - Track Name"
+
+
+def test_fetch_playlist_track_queries_paginates_and_formats_tracks():
+    client = MagicMock()
+    client.playlist_items.side_effect = [
+        {
+            "items": [
+                {"track": _mk_track("One", ["A"], "uri:1")},
+                {"track": None},
+            ],
+            "next": "next-page",
+        },
+        {
+            "items": [
+                {"track": _mk_track("Two", ["B", "C"], "uri:2")},
+            ],
+            "next": None,
+        },
+    ]
+
+    assert m.fetch_playlist_track_queries(client, "playlist:download") == [
+        "A - One",
+        "B, C - Two",
+    ]
+    assert client.playlist_items.call_count == 2
+
+
 def test_fetch_followed_labels_from_playlist_fetches_album_labels(monkeypatch):
     client = MagicMock()
     monkeypatch.setattr(

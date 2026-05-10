@@ -5,7 +5,7 @@ import pandas as pd
 
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 from dotenv import load_dotenv
 
 from spotipy import Spotify
@@ -117,6 +117,48 @@ def fetch_playlist_album_uris(client: Spotify, playlist_uri: str) -> List[str]:
         offset += limit
 
     return album_uris
+
+
+def format_track_query(track: Dict[str, Any]) -> str:
+    """Format a Spotify track as an artist-title search query."""
+
+    artists = track.get("artists") or []
+    artist_names = ", ".join(
+        name
+        for artist in artists
+        if isinstance(artist, dict) and isinstance(name := artist.get("name"), str)
+    )
+    return f"{artist_names} - {track['name']}"
+
+
+def fetch_playlist_track_queries(client: Spotify, playlist_uri: str) -> List[str]:
+    """Fetch playlist tracks as `artist - title` lines, preserving playlist order."""
+
+    queries: List[str] = []
+    offset = 0
+    limit = 100
+
+    while True:
+        page = client.playlist_items(
+            playlist_uri,
+            fields="items(track(name,artists(name))),next",
+            limit=limit,
+            offset=offset,
+            additional_types=("track",),
+        )
+
+        for item in page["items"]:
+            track = item.get("track")
+            if not track:
+                continue
+            queries.append(format_track_query(track))
+
+        if not page.get("next"):
+            break
+
+        offset += limit
+
+    return queries
 
 
 def fetch_and_add(

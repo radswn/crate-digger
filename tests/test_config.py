@@ -12,6 +12,8 @@ def test_load_config_valid(tmp_path):
         to-listen-playlist = "pl:1"
         test-playlist = "pl:test"
         followed-labels-playlist = "pl:labels"
+        to-download-playlist = "pl:download"
+        acapella-playlist = "pl:acapella"
         scopes = ["a", "b"]
         """
     )
@@ -23,6 +25,8 @@ def test_load_config_valid(tmp_path):
     assert cfg["spotify"]["to_listen_playlist"] == "pl:1"
     assert cfg["spotify"]["test_playlist"] == "pl:test"
     assert cfg["spotify"]["followed_labels_playlist"] == "pl:labels"
+    assert cfg["spotify"]["to_download_playlist"] == "pl:download"
+    assert cfg["spotify"]["acapella_playlist"] == "pl:acapella"
     assert cfg["spotify"]["scopes"] == ["a", "b"]
 
 
@@ -41,6 +45,8 @@ def test_load_config_requires_strings_and_lists(tmp_path):
         to-listen-playlist = 123
         test-playlist = "pl"
         followed-labels-playlist = "pl:labels"
+        to-download-playlist = "pl:download"
+        acapella-playlist = "pl:acapella"
         scopes = "not-a-list"
         """
     )
@@ -58,6 +64,8 @@ def test_get_settings_caches_config(tmp_path):
         to-listen-playlist = "pl:1"
         test-playlist = "pl:test"
         followed-labels-playlist = "pl:labels"
+        to-download-playlist = "pl:download"
+        acapella-playlist = "pl:acapella"
         scopes = ["a"]
         """
     )

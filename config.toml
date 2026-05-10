@@ -2,6 +2,8 @@
 to-listen-playlist = "spotify:playlist:3i2ruN3gPygSsQzcvQG9ri"
 test-playlist = "spotify:playlist:4RZVqEcYVkzgExsDRnmwNp"
 followed-labels-playlist = "spotify:playlist:4PT220EaTKVNwmkaKqAh4y"
+to-download-playlist = "spotify:playlist:33iVI5YnUw5S2jI0q4u0Ok"
+acapella-playlist = "spotify:playlist:3psbKEyeaLETJXhLtcyhnG"
 scopes = [
     "playlist-modify-private",
     "playlist-read-private",

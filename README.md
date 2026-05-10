@@ -18,7 +18,8 @@ A Python application that discovers new music releases and automates Spotify pla
 src/crate_digger/
 ├── main/
 │   ├── fetch_new_releases.py      # Scheduled release fetcher (main entry point)
-│   └── backfill_label_history.py  # Historical backfill script
+│   ├── backfill_label_history.py  # Historical backfill script
+│   └── export_playlist.py         # Text exports for configured playlists
 ├── utils/
 │   ├── spotify.py                 # Spotify API helpers (fetch, filter, dedupe)
 │   ├── config.py                  # Config loading & validation
@@ -64,6 +65,8 @@ Create or edit `config.toml`:
 to-listen-playlist = "spotify:playlist:YOUR_PLAYLIST_ID"
 test-playlist = "spotify:playlist:YOUR_TEST_PLAYLIST_ID"
 followed-labels-playlist = "spotify:playlist:YOUR_FOLLOWED_LABELS_PLAYLIST_ID"
+to-download-playlist = "spotify:playlist:YOUR_TO_DOWNLOAD_PLAYLIST_ID"
+acapella-playlist = "spotify:playlist:YOUR_ACAPELLA_PLAYLIST_ID"
 scopes = [
     "playlist-modify-private",
     "playlist-read-private",
@@ -107,6 +110,12 @@ uv run python -m crate_digger.main.fetch_new_releases
 
 # Backfill label history into playlists
 uv run python -m crate_digger.main.backfill_label_history "Hot Creations"
+
+# Export the to-download playlist to artist-title lines
+uv run python -m crate_digger.main.export_playlist to-download wishlist.txt
+
+# Export the acapella playlist to artist-title lines
+uv run python -m crate_digger.main.export_playlist acapella acapella.txt
 ```
 
 ## Usage
@@ -134,6 +143,26 @@ uv run python -m crate_digger.main.backfill_label_history "Label Name"
 - Collects all releases by label since 1990
 - Groups into numbered playlists (max 50 tracks each)
 
+### Export To-Download Playlist
+
+```bash
+uv run python -m crate_digger.main.export_playlist to-download wishlist.txt
+```
+
+- Reads `spotify.to-download-playlist`
+- Writes one track per line in `Artist 1, Artist 2 - Track Title` format
+- Also available as `make export-to-download-playlist OUTPUT=wishlist.txt`
+
+### Export Acapella Playlist
+
+```bash
+uv run python -m crate_digger.main.export_playlist acapella acapella.txt
+```
+
+- Reads `spotify.acapella-playlist`
+- Writes one track per line in `Artist 1, Artist 2 - Track Title` format
+- Also available as `make export-acapella-playlist ACAPELLA_OUTPUT=acapella.txt`
+
 ## Testing
 
 ```bash
@@ -158,11 +187,13 @@ uv run pytest tests/test_spotify.py
 - **`spotify.to-listen-playlist`** (string) – Playlist URI for newly found releases
 - **`spotify.test-playlist`** (string) – Optional test playlist
 - **`spotify.followed-labels-playlist`** (string) – Playlist URI containing one representative track per followed label
+- **`spotify.to-download-playlist`** (string) – Playlist URI exported by `export_playlist to-download`
+- **`spotify.acapella-playlist`** (string) – Playlist URI exported by `export_playlist acapella`
 - **`spotify.scopes`** (list of strings) – OAuth scopes required
 
 **Validation:**
 - Required sections: `[spotify]`
-- Required keys: `to-listen-playlist`, `test-playlist`, `followed-labels-playlist`, `scopes`
+- Required keys: `to-listen-playlist`, `test-playlist`, `followed-labels-playlist`, `to-download-playlist`, `acapella-playlist`, `scopes`
 - All values type-checked; helpful error messages on load failures
 
 ### Environment Variables
