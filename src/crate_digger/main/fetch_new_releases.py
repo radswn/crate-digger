@@ -1,7 +1,9 @@
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.followed_labels import (
     compute_followed_label_changes,
+    load_cached_backfilled_labels,
     load_followed_labels_state,
+    save_cached_backfilled_labels,
     save_followed_labels_state,
 )
 from crate_digger.utils.spotify import (
@@ -9,6 +11,7 @@ from crate_digger.utils.spotify import (
     fetch_and_add,
     fetch_followed_labels_from_playlist,
     get_spotify_client,
+    label_has_backfill_playlist,
 )
 from crate_digger.utils.telegram import construct_message, send_message
 
@@ -24,16 +27,27 @@ followed_labels = fetch_followed_labels_from_playlist(
 previous_labels = load_followed_labels_state()
 label_changes = compute_followed_label_changes(followed_labels, previous_labels)
 backfilled_labels = []
+cached_backfilled_labels = load_cached_backfilled_labels()
+cached_backfilled_label_set = set(cached_backfilled_labels)
 
 for label in label_changes.added:
+    if label in cached_backfilled_label_set:
+        continue
+
+    if label_has_backfill_playlist(sp, label):
+        continue
+
     backfill_label_history(sp, label)
     backfilled_labels.append(label)
+    cached_backfilled_labels.append(label)
+    cached_backfilled_label_set.add(label)
 
 track_info_to_send = fetch_and_add(
     sp, followed_labels, spotify_config["to_listen_playlist"]
 )
 
 save_followed_labels_state(label_changes.current)
+save_cached_backfilled_labels(cached_backfilled_labels)
 
 if track_info_to_send or label_changes.added or label_changes.removed:
     message = construct_message(

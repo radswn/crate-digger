@@ -2,7 +2,9 @@ import json
 
 from crate_digger.utils.followed_labels import (
     compute_followed_label_changes,
+    load_cached_backfilled_labels,
     load_followed_labels_state,
+    save_cached_backfilled_labels,
     save_followed_labels_state,
     unique_preserving_order,
 )
@@ -37,3 +39,12 @@ def test_followed_label_state_round_trips(tmp_path):
 
     assert json.loads(state_path.read_text()) == {"labels": ["A", "B"]}
     assert load_followed_labels_state(state_path) == ["A", "B"]
+
+
+def test_backfilled_label_state_round_trips(tmp_path):
+    state_path = tmp_path / "state" / "backfilled_labels.json"
+
+    save_cached_backfilled_labels(["A", "B", "A"], state_path)
+
+    assert json.loads(state_path.read_text()) == {"labels": ["A", "B"]}
+    assert load_cached_backfilled_labels(state_path) == ["A", "B"]

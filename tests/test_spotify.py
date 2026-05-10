@@ -226,6 +226,48 @@ def test_add_to_playlist_calls_playlist_add_items():
     client.playlist_add_items.assert_called_once_with("playlist_id", ["u1", "u2"])
 
 
+def test_playlist_name_matches_label_handles_common_backfill_names():
+    assert m.playlist_name_matches_label("Black Book Records 004", "Black Book Records")
+    assert m.playlist_name_matches_label("Cecille Records1", "Cecille Records")
+    assert m.playlist_name_matches_label("Cecille Records 4 [DONE]", "Cecille Records")
+    assert m.playlist_name_matches_label("BOX RED 001", "BOX RED")
+    assert not m.playlist_name_matches_label("Coconut Cuts", "COCO")
+
+
+def test_fetch_user_playlist_names_paginates():
+    client = MagicMock()
+    client.current_user_playlists.side_effect = [
+        {
+            "items": [
+                {"name": "Label 001"},
+                {"name": ""},
+            ],
+            "next": "next-page",
+        },
+        {
+            "items": [
+                {"name": "Other 001"},
+            ],
+            "next": None,
+        },
+    ]
+
+    assert m.fetch_user_playlist_names(client) == ["Label 001", "Other 001"]
+    assert client.current_user_playlists.call_count == 2
+
+
+def test_label_has_backfill_playlist_uses_name_match(monkeypatch):
+    client = MagicMock()
+    monkeypatch.setattr(
+        m,
+        "fetch_user_playlist_names",
+        lambda c: ["Unrelated", "Cecille Records1"],
+    )
+
+    assert m.label_has_backfill_playlist(client, "Cecille Records") is True
+    assert m.label_has_backfill_playlist(client, "Black Book Records") is False
+
+
 def test_fetch_playlist_album_uris_paginates_and_dedupes():
     client = MagicMock()
     client.playlist_items.side_effect = [

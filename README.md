@@ -122,7 +122,8 @@ uv run python -m crate_digger.main.fetch_new_releases
 - Adds unique tracks to your "to-listen" playlist
 - Sends a compact Telegram summary
 - Detects labels added to or removed from the followed-label playlist
-- Backfills historical playlists for newly added labels, with a small delay between broad Spotify API calls
+- Backfills historical playlists for newly added labels, unless the app has already backfilled them or an existing playlist name appears to contain the label
+- Uses a small delay between broad Spotify API calls
 
 ### Backfill History
 
@@ -184,7 +185,7 @@ Create a `.env` file in the project root (already loaded via `python-dotenv`):
 The repository is configured to run on Saturday mornings via GitHub Actions:
 
 1. OAuth token cached in AWS S3 between runs
-2. Followed-label state cached in AWS S3 between runs
+2. Followed-label and app-backfilled-label state cached in AWS S3 between runs
 3. New releases fetched every Saturday at 02:15 UTC
 4. Newly added labels backfilled into historical playlists
 5. Results posted to Telegram

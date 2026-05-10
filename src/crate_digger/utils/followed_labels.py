@@ -6,6 +6,7 @@ from typing import Sequence
 
 
 DEFAULT_STATE_PATH = Path(".crate_digger_state") / "followed_labels.json"
+DEFAULT_BACKFILLED_LABELS_PATH = Path(".crate_digger_state") / "backfilled_labels.json"
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,39 @@ def save_followed_labels_state(
     labels: Sequence[str], state_path: Path = DEFAULT_STATE_PATH
 ) -> None:
     """Persist the current followed labels for change detection next run."""
+
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {"labels": unique_preserving_order(labels)}
+    with state_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
+
+def load_cached_backfilled_labels(
+    state_path: Path = DEFAULT_BACKFILLED_LABELS_PATH,
+) -> list[str]:
+    """Load labels this app has backfilled itself."""
+
+    if not state_path.exists():
+        return []
+
+    with state_path.open("r", encoding="utf-8") as f:
+        payload = json.load(f)
+
+    labels = payload.get("labels")
+    if not isinstance(labels, list) or not all(
+        isinstance(label, str) for label in labels
+    ):
+        raise ValueError(f"Invalid backfilled label state in {state_path}")
+
+    return unique_preserving_order(labels)
+
+
+def save_cached_backfilled_labels(
+    labels: Sequence[str], state_path: Path = DEFAULT_BACKFILLED_LABELS_PATH
+) -> None:
+    """Persist labels this app has backfilled itself."""
 
     state_path.parent.mkdir(parents=True, exist_ok=True)
 

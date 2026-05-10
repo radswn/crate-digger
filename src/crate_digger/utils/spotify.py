@@ -284,6 +284,25 @@ def normalize_title(title: str) -> str:
     return " ".join(re.sub(r"[^\w\s]", "", title.lower()).split())
 
 
+def normalize_playlist_label_text(text: str) -> str:
+    """Normalize labels and playlist names for loose backfill matching."""
+
+    return " ".join(re.sub(r"[^\w\s]", " ", text.lower()).split())
+
+
+def playlist_name_matches_label(playlist_name: str, label: str) -> bool:
+    """Return whether a playlist title looks like a backfill for the label."""
+
+    normalized_playlist = normalize_playlist_label_text(playlist_name)
+    normalized_label = normalize_playlist_label_text(label)
+
+    if not normalized_label:
+        return False
+
+    pattern = rf"(^|\s){re.escape(normalized_label)}(\s|\d|$)"
+    return re.search(pattern, normalized_playlist) is not None
+
+
 def is_extended_version(normalized_title: str) -> bool:
     """Check if a normalized title indicates an extended version.
 
@@ -380,6 +399,45 @@ def add_to_playlist(client: Spotify, playlist_id: str, track_uris: List[str]) ->
     )
 
     return snapshot_id
+
+
+def fetch_user_playlist_names(client: Spotify) -> List[str]:
+    """Fetch all playlists visible to the current Spotify user."""
+
+    playlist_names: List[str] = []
+    offset = 0
+    limit = 50
+
+    while True:
+        page = client.current_user_playlists(limit=limit, offset=offset)
+        playlist_names.extend(
+            playlist["name"] for playlist in page["items"] if playlist.get("name")
+        )
+
+        if not page.get("next"):
+            break
+
+        offset += limit
+
+    return playlist_names
+
+
+def label_has_backfill_playlist(client: Spotify, label: str) -> bool:
+    """Check whether existing playlist names suggest this label was backfilled."""
+
+    matching_playlist_names = [
+        playlist_name
+        for playlist_name in fetch_user_playlist_names(client)
+        if playlist_name_matches_label(playlist_name, label)
+    ]
+
+    if matching_playlist_names:
+        logger.info(
+            f"Skipping backfill for {label}; found existing playlist {matching_playlist_names[0]!r}"
+        )
+        return True
+
+    return False
 
 
 def fetch_all_releases(
