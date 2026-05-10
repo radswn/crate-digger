@@ -3,7 +3,7 @@
 A Python application that discovers new music releases and automates Spotify playlist management. It follows record labels represented by tracks in a Spotify playlist, deduplicates new tracks, and notifies you via Telegram.
 
 **Features:**
-- 🎵 Auto-fetch new releases daily from labels represented in a Spotify playlist
+- 🎵 Auto-fetch new releases weekly from labels represented in a Spotify playlist
 - 🎯 Intelligent deduplication and extended version filtering
 - 📱 Compact Telegram summaries for new releases and followed-label changes
 - 📚 Historical backfill when a new label is added to the followed playlist
@@ -17,7 +17,7 @@ A Python application that discovers new music releases and automates Spotify pla
 ```
 src/crate_digger/
 ├── main/
-│   ├── fetch_new_releases.py      # Daily release fetcher (main entry point)
+│   ├── fetch_new_releases.py      # Scheduled release fetcher (main entry point)
 │   └── backfill_label_history.py  # Historical backfill script
 ├── utils/
 │   ├── spotify.py                 # Spotify API helpers (fetch, filter, dedupe)
@@ -111,7 +111,7 @@ uv run python -m crate_digger.main.backfill_label_history "Hot Creations"
 
 ## Usage
 
-### Daily Sync
+### Weekly Sync
 
 ```bash
 uv run python -m crate_digger.main.fetch_new_releases
@@ -154,7 +154,7 @@ uv run pytest tests/test_spotify.py
 
 ### `config.toml` Schema
 
-- **`spotify.to-listen-playlist`** (string) – Playlist URI for daily new releases
+- **`spotify.to-listen-playlist`** (string) – Playlist URI for newly found releases
 - **`spotify.test-playlist`** (string) – Optional test playlist
 - **`spotify.followed-labels-playlist`** (string) – Playlist URI containing one representative track per followed label
 - **`spotify.scopes`** (list of strings) – OAuth scopes required
@@ -181,11 +181,11 @@ Create a `.env` file in the project root (already loaded via `python-dotenv`):
 
 ### GitHub Actions
 
-The repository is configured to run daily via GitHub Actions:
+The repository is configured to run on Saturday mornings via GitHub Actions:
 
 1. OAuth token cached in AWS S3 between runs
 2. Followed-label state cached in AWS S3 between runs
-3. New releases fetched every day at 08:15 UTC
+3. New releases fetched every Saturday at 02:15 UTC
 4. Newly added labels backfilled into historical playlists
 5. Results posted to Telegram
 
