@@ -20,3 +20,8 @@ dev = [
     "pre-commit>=4.5.1",
     "ty>=0.0.8",
 ]
+
+[tool.pytest.ini_options]
+markers = [
+    "spotify_live: tests that call the live Spotify API using the configured test playlist",
+]
