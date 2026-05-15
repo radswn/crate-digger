@@ -13,6 +13,9 @@ class LocalTrack:
     duration_seconds: float | None
     bitrate: int | None
     audio_format: str | None
+    artwork_mime: str | None = None
+    artwork_data: bytes | None = None
+    spotify_uri: str | None = None
 
     @property
     def display_title(self) -> str:

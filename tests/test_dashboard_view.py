@@ -2,7 +2,7 @@ import sqlite3
 from pathlib import Path
 
 from crate_digger.collection.index import _ensure_schema
-from crate_digger.web.app import _build_collection_view
+from crate_digger.web.app import _build_collection_view, _search_spotify_candidates
 
 
 def seed_track(
@@ -27,14 +27,15 @@ def seed_track(
                 title,
                 artist,
                 album,
-                duration_seconds,
-                bitrate,
-                audio_format,
-                size,
-                mtime_ns,
-                indexed_at
-            )
-            values (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, '2026-01-01T00:00:00+00:00')
+            duration_seconds,
+            bitrate,
+            audio_format,
+            artwork_checked,
+            size,
+            mtime_ns,
+            indexed_at
+        )
+            values (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
             """,
             (
                 str(path),
@@ -155,6 +156,48 @@ def test_collection_view_sorts_and_paginates(tmp_path):
     )
 
     assert view.filtered_count == 26
-    assert view.total_pages == 2
+    assert view.total_pages == 3
     assert view.query.page == 2
-    assert [track.path.name for track in view.tracks] == ["track-0.mp3"]
+    assert len(view.tracks) == 10
+    assert view.tracks[0].path.name == "track-15.mp3"
+    assert view.query.page_size == 10
+
+
+def test_search_spotify_candidates_formats_results():
+    class Client:
+        def search(self, *, q, type, limit, offset):
+            assert q == "Ada - Deep Burn"
+            assert type == "track"
+            assert limit == 5
+            assert offset == 10
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "uri": "spotify:track:1",
+                            "name": "Deep Burn",
+                            "artists": [{"name": "Ada"}],
+                            "album": {
+                                "name": "Night Work",
+                                "images": [{"url": "https://i.scdn.co/image/cover"}],
+                            },
+                            "external_urls": {
+                                "spotify": "https://open.spotify.com/track/1"
+                            },
+                        }
+                    ]
+                }
+            }
+
+    candidates = _search_spotify_candidates(
+        Client(),
+        "Ada - Deep Burn",
+        offset=10,
+        limit=5,
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].uri == "spotify:track:1"
+    assert candidates[0].artists == "Ada"
+    assert candidates[0].album == "Night Work"
+    assert candidates[0].image_url == "https://i.scdn.co/image/cover"

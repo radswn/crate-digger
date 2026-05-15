@@ -54,6 +54,115 @@ class TrackQueryResult:
     formats: list[str]
 
 
+def get_track_artwork(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+) -> tuple[str, bytes] | None:
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        row = conn.execute(
+            """
+            select artwork_mime, artwork_data
+            from tracks
+            where path = ?
+            """,
+            (path,),
+        ).fetchone()
+
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return str(row[0]), bytes(row[1])
+
+
+def get_track_for_spotify_linking(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str | None = None,
+) -> LocalTrack | None:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_schema(conn)
+        if path is not None:
+            row = conn.execute(
+                """
+                select
+                    path,
+                    title,
+                    artist,
+                    album,
+                    duration_seconds,
+                    bitrate,
+                    audio_format,
+                    artwork_mime,
+                    spotify_uri
+                from tracks
+                where path = ?
+                """,
+                (path,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                select
+                    path,
+                    title,
+                    artist,
+                    album,
+                    duration_seconds,
+                    bitrate,
+                    audio_format,
+                    artwork_mime,
+                    spotify_uri
+                from tracks
+                where spotify_uri is null
+                  and spotify_link_skipped_at is null
+                order by lower(coalesce(nullif(artist, ''), '')), lower(coalesce(nullif(title, ''), stem)), lower(path)
+                limit 1
+                """
+            ).fetchone()
+
+    if row is None:
+        return None
+    return _track_from_row(row)
+
+
+def set_track_spotify_uri(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+    spotify_uri: str,
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            """
+            update tracks
+            set spotify_uri = ?,
+                spotify_link_skipped_at = null
+            where path = ?
+            """,
+            (spotify_uri, path),
+        )
+
+
+def skip_track_spotify_link(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            """
+            update tracks
+            set spotify_link_skipped_at = ?
+            where path = ?
+            """,
+            (datetime.now(timezone.utc).isoformat(), path),
+        )
+
+
 def refresh_collection_index(
     music_dirs: Iterable[str | Path],
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
@@ -127,7 +236,16 @@ def query_tracks(
 
         rows = conn.execute(
             f"""
-            select path, title, artist, album, duration_seconds, bitrate, audio_format
+            select
+                path,
+                title,
+                artist,
+                album,
+                duration_seconds,
+                bitrate,
+                audio_format,
+                artwork_mime,
+                spotify_uri
             from tracks
             {where_sql}
             order by {missing_expr} asc, {sort_expr} {direction_sql}, lower(path) asc
@@ -170,12 +288,22 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             duration_seconds real,
             bitrate integer,
             audio_format text,
+            artwork_mime text,
+            artwork_data blob,
+            artwork_checked integer not null default 0,
+            spotify_uri text,
+            spotify_link_skipped_at text,
             size integer not null,
             mtime_ns integer not null,
             indexed_at text not null
         )
         """
     )
+    _ensure_column(conn, "tracks", "artwork_mime", "text")
+    _ensure_column(conn, "tracks", "artwork_data", "blob")
+    _ensure_column(conn, "tracks", "artwork_checked", "integer not null default 0")
+    _ensure_column(conn, "tracks", "spotify_uri", "text")
+    _ensure_column(conn, "tracks", "spotify_link_skipped_at", "text")
     conn.execute("create index if not exists idx_tracks_format on tracks(audio_format)")
     conn.execute("create index if not exists idx_tracks_title on tracks(title)")
     conn.execute("create index if not exists idx_tracks_artist on tracks(artist)")
@@ -184,10 +312,19 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "create index if not exists idx_tracks_duration on tracks(duration_seconds)"
     )
+    conn.execute(
+        "create index if not exists idx_tracks_spotify_uri on tracks(spotify_uri)"
+    )
 
 
 def _load_existing_file_state(conn: sqlite3.Connection) -> dict[str, tuple[int, int]]:
-    rows = conn.execute("select path, size, mtime_ns from tracks").fetchall()
+    rows = conn.execute(
+        """
+        select path, size, mtime_ns
+        from tracks
+        where artwork_checked = 1
+        """
+    ).fetchall()
     return {str(path): (int(size), int(mtime_ns)) for path, size, mtime_ns in rows}
 
 
@@ -209,11 +346,15 @@ def _upsert_track(
             duration_seconds,
             bitrate,
             audio_format,
+            artwork_mime,
+            artwork_data,
+            artwork_checked,
+            spotify_uri,
             size,
             mtime_ns,
             indexed_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(path) do update set
             stem = excluded.stem,
             title = excluded.title,
@@ -222,6 +363,9 @@ def _upsert_track(
             duration_seconds = excluded.duration_seconds,
             bitrate = excluded.bitrate,
             audio_format = excluded.audio_format,
+            artwork_mime = excluded.artwork_mime,
+            artwork_data = excluded.artwork_data,
+            artwork_checked = excluded.artwork_checked,
             size = excluded.size,
             mtime_ns = excluded.mtime_ns,
             indexed_at = excluded.indexed_at
@@ -235,6 +379,10 @@ def _upsert_track(
             track.duration_seconds,
             track.bitrate,
             track.audio_format,
+            track.artwork_mime,
+            track.artwork_data,
+            1,
+            track.spotify_uri,
             size,
             mtime_ns,
             datetime.now(timezone.utc).isoformat(),
@@ -323,4 +471,22 @@ def _track_from_row(row: sqlite3.Row) -> LocalTrack:
         duration_seconds=row["duration_seconds"],
         bitrate=row["bitrate"],
         audio_format=row["audio_format"],
+        artwork_mime=row["artwork_mime"],
+        spotify_uri=row["spotify_uri"],
     )
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute(f"pragma table_info({table_name})").fetchall()
+    }
+    if column_name not in columns:
+        conn.execute(
+            f"alter table {table_name} add column {column_name} {column_definition}"
+        )

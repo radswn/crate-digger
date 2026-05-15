@@ -187,8 +187,10 @@ make dashboard
 - Serves a FastAPI dashboard at <http://127.0.0.1:8765>
 - Reads configured folders from `collection.music-dirs`
 - Indexes supported audio files into `.crate_digger_state/collection.sqlite3`
+- Displays embedded album artwork when available
 - Searches, filters, sorts, and pages from SQLite instead of rescanning on each request
 - Provides a "Refresh index" button to pick up file changes while the server is running
+- Provides per-track Spotify linking actions that search the API only when opened
 - Exposes the same data as JSON at `/api/tracks`
 - Uses the `dashboard` dependency group, so `uv` installs the web dependencies on demand
 

@@ -56,6 +56,7 @@ def read_track_metadata(path: Path) -> LocalTrack:
         audio = File(path, easy=True)
     except MutagenError:
         audio = None
+    artwork_mime, artwork_data = read_embedded_artwork(path)
     if audio is None:
         return LocalTrack(
             path=path,
@@ -65,6 +66,8 @@ def read_track_metadata(path: Path) -> LocalTrack:
             duration_seconds=None,
             bitrate=None,
             audio_format=path.suffix.removeprefix(".").upper() or None,
+            artwork_mime=artwork_mime,
+            artwork_data=artwork_data,
         )
 
     return LocalTrack(
@@ -75,7 +78,57 @@ def read_track_metadata(path: Path) -> LocalTrack:
         duration_seconds=getattr(audio.info, "length", None),
         bitrate=getattr(audio.info, "bitrate", None),
         audio_format=path.suffix.removeprefix(".").upper() or None,
+        artwork_mime=artwork_mime,
+        artwork_data=artwork_data,
     )
+
+
+def read_embedded_artwork(path: Path) -> tuple[str | None, bytes | None]:
+    try:
+        audio = File(path, easy=False)
+    except MutagenError:
+        return None, None
+    if audio is None:
+        return None, None
+
+    flac_picture = _first_picture(getattr(audio, "pictures", None))
+    if flac_picture is not None:
+        return getattr(flac_picture, "mime", None), getattr(flac_picture, "data", None)
+
+    tags = getattr(audio, "tags", None)
+    if not tags:
+        return None, None
+
+    mp4_cover = _first_cover(tags)
+    if isinstance(mp4_cover, bytes):
+        mime = _mp4_cover_mime(mp4_cover)
+        return mime, bytes(mp4_cover)
+
+    for key, value in tags.items():
+        if str(key).startswith("APIC"):
+            return getattr(value, "mime", None), getattr(value, "data", None)
+
+    return None, None
+
+
+def _first_picture(pictures: object) -> object | None:
+    if isinstance(pictures, list) and pictures:
+        return pictures[0]
+    return None
+
+
+def _first_cover(tags: Any) -> object | None:
+    covers = tags.get("covr")
+    if isinstance(covers, list) and covers:
+        return covers[0]
+    return None
+
+
+def _mp4_cover_mime(cover: object) -> str:
+    imageformat = getattr(cover, "imageformat", None)
+    if imageformat == getattr(cover, "FORMAT_PNG", 14):
+        return "image/png"
+    return "image/jpeg"
 
 
 def _first_tag(tags: Any, *keys: str) -> str | None:
