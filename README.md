@@ -186,7 +186,9 @@ make dashboard
 
 - Serves a FastAPI dashboard at <http://127.0.0.1:8765>
 - Reads configured folders from `collection.music-dirs`
-- Recursively lists supported audio files and lightweight tag metadata
+- Indexes supported audio files into `.crate_digger_state/collection.sqlite3`
+- Searches, filters, sorts, and pages from SQLite instead of rescanning on each request
+- Provides a "Refresh index" button to pick up file changes while the server is running
 - Exposes the same data as JSON at `/api/tracks`
 - Uses the `dashboard` dependency group, so `uv` installs the web dependencies on demand
 
