@@ -1,4 +1,9 @@
-from crate_digger.collection.scanner import discover_audio_files, scan_collection
+from crate_digger.collection.scanner import (
+    discover_audio_files,
+    overwrite_embedded_artwork,
+    read_track_metadata,
+    scan_collection,
+)
 
 
 def test_discover_audio_files_recurses_supported_extensions(tmp_path):
@@ -26,3 +31,78 @@ def test_scan_collection_falls_back_to_path_metadata(tmp_path):
     assert results[0].display_title == "Artist - Title"
     assert results[0].display_artist == "Unknown artist"
     assert results[0].audio_format == "MP3"
+    assert results[0].file_created_at is not None
+
+
+def test_read_track_metadata_reads_extended_tags(tmp_path, monkeypatch):
+    track = tmp_path / "tagged.flac"
+    track.write_bytes(b"not real audio")
+
+    class Info:
+        length = 123.4
+        bitrate = 900000
+
+    class Audio:
+        tags = {
+            "title": ["After Coma"],
+            "artist": ["Omon Breaker"],
+            "album": ["Standard Deviation 2"],
+            "comment": ["-=TechnoRulez=-"],
+            "genre": ["Techno"],
+            "date": ["2024-03-01"],
+        }
+        info = Info()
+
+    def fake_file(path, easy=True):
+        return Audio() if easy else None
+
+    monkeypatch.setattr("crate_digger.collection.scanner.File", fake_file)
+
+    result = read_track_metadata(track)
+
+    assert result.title == "After Coma"
+    assert result.artist == "Omon Breaker"
+    assert result.album == "Standard Deviation 2"
+    assert result.comment == "-=TechnoRulez=-"
+    assert result.genre == "Techno"
+    assert result.release_date == "2024-03-01"
+    assert result.file_created_at is not None
+
+
+def test_overwrite_embedded_artwork_updates_flac_cover(tmp_path, monkeypatch):
+    track = tmp_path / "track.flac"
+    track.write_bytes(b"not real audio")
+    saved = {}
+
+    class Picture:
+        type = 0
+        mime = ""
+        desc = ""
+        data = b""
+
+    class Audio:
+        def clear_pictures(self):
+            saved["cleared"] = True
+
+        def add_picture(self, picture):
+            saved["picture"] = picture
+
+        def save(self):
+            saved["saved"] = True
+
+    monkeypatch.setattr("crate_digger.collection.scanner.FLAC", lambda path: Audio())
+    monkeypatch.setattr("crate_digger.collection.scanner.Picture", Picture)
+
+    assert overwrite_embedded_artwork(track, mime="image/jpeg", data=b"cover")
+    assert saved["cleared"] is True
+    assert saved["saved"] is True
+    assert saved["picture"].type == 3
+    assert saved["picture"].mime == "image/jpeg"
+    assert saved["picture"].data == b"cover"
+
+
+def test_overwrite_embedded_artwork_ignores_unsupported_format(tmp_path):
+    track = tmp_path / "track.wav"
+    track.write_bytes(b"not real audio")
+
+    assert not overwrite_embedded_artwork(track, mime="image/jpeg", data=b"cover")

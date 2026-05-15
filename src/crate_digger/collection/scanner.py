@@ -1,8 +1,13 @@
 from collections.abc import Iterable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from mutagen import File, MutagenError
+from mutagen.flac import FLAC, Picture
+from mutagen.id3 import APIC, ID3NoHeaderError
+from mutagen.mp3 import MP3
+from mutagen.mp4 import MP4, MP4Cover
 
 from crate_digger.collection.models import LocalTrack
 
@@ -52,6 +57,7 @@ def scan_collection(paths: Iterable[str | Path]) -> list[LocalTrack]:
 
 
 def read_track_metadata(path: Path) -> LocalTrack:
+    file_created_at = _file_created_at(path)
     try:
         audio = File(path, easy=True)
     except MutagenError:
@@ -66,6 +72,7 @@ def read_track_metadata(path: Path) -> LocalTrack:
             duration_seconds=None,
             bitrate=None,
             audio_format=path.suffix.removeprefix(".").upper() or None,
+            file_created_at=file_created_at,
             artwork_mime=artwork_mime,
             artwork_data=artwork_data,
         )
@@ -75,6 +82,16 @@ def read_track_metadata(path: Path) -> LocalTrack:
         title=_first_tag(audio.tags, "title"),
         artist=_first_tag(audio.tags, "artist", "albumartist"),
         album=_first_tag(audio.tags, "album"),
+        comment=_first_tag(audio.tags, "comment", "comments", "description"),
+        genre=_first_tag(audio.tags, "genre"),
+        release_date=_first_tag(
+            audio.tags,
+            "date",
+            "originaldate",
+            "releasedate",
+            "year",
+        ),
+        file_created_at=file_created_at,
         duration_seconds=getattr(audio.info, "length", None),
         bitrate=getattr(audio.info, "bitrate", None),
         audio_format=path.suffix.removeprefix(".").upper() or None,
@@ -111,6 +128,67 @@ def read_embedded_artwork(path: Path) -> tuple[str | None, bytes | None]:
     return None, None
 
 
+def overwrite_embedded_artwork(path: Path, *, mime: str, data: bytes) -> bool:
+    """Replace embedded cover art for formats Mutagen can safely update."""
+
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".flac":
+            _overwrite_flac_artwork(path, mime=mime, data=data)
+        elif suffix == ".mp3":
+            _overwrite_mp3_artwork(path, mime=mime, data=data)
+        elif suffix in {".m4a", ".mp4", ".alac"}:
+            _overwrite_mp4_artwork(path, mime=mime, data=data)
+        else:
+            return False
+    except (MutagenError, OSError):
+        return False
+
+    return True
+
+
+def _overwrite_flac_artwork(path: Path, *, mime: str, data: bytes) -> None:
+    audio = FLAC(path)
+    picture = Picture()
+    picture.type = 3
+    picture.mime = mime
+    picture.desc = "Cover"
+    picture.data = data
+    audio.clear_pictures()
+    audio.add_picture(picture)
+    audio.save()
+
+
+def _overwrite_mp3_artwork(path: Path, *, mime: str, data: bytes) -> None:
+    audio = MP3(path)
+    if audio.tags is None:
+        try:
+            audio.add_tags()
+        except ID3NoHeaderError:
+            pass
+    if audio.tags is None:
+        return
+
+    audio.tags.delall("APIC")
+    audio.tags.add(
+        APIC(
+            encoding=3,
+            mime=mime,
+            type=3,
+            desc="Cover",
+            data=data,
+        )
+    )
+    audio.save()
+
+
+def _overwrite_mp4_artwork(path: Path, *, mime: str, data: bytes) -> None:
+    audio = MP4(path)
+    image_format = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
+    audio["covr"] = [MP4Cover(data, imageformat=image_format)]
+    audio.save()
+
+
 def _first_picture(pictures: object) -> object | None:
     if isinstance(pictures, list) and pictures:
         return pictures[0]
@@ -129,6 +207,15 @@ def _mp4_cover_mime(cover: object) -> str:
     if imageformat == getattr(cover, "FORMAT_PNG", 14):
         return "image/png"
     return "image/jpeg"
+
+
+def _file_created_at(path: Path) -> str | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    timestamp = getattr(stat, "st_birthtime", stat.st_ctime)
+    return datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
 
 
 def _first_tag(tags: Any, *keys: str) -> str | None:

@@ -48,7 +48,14 @@ def get_spotify_client(scope: str) -> Spotify:
 
     cache_handler = CacheFileHandler(cache_path=cache_path)
     auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
-    sp = Spotify(auth_manager=auth)
+    sp = Spotify(
+        auth_manager=auth,
+        requests_timeout=10,
+        retries=2,
+        status_retries=2,
+        backoff_factor=0.5,
+        status_forcelist=(429, 500, 502, 503, 504),
+    )
 
     logger.info(f"Instantiated Spotipy client for scope {scope}")
     return sp

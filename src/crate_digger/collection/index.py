@@ -23,6 +23,18 @@ SORT_COLUMNS = {
         "case when album is null or album = '' then 1 else 0 end",
         "lower(coalesce(album, ''))",
     ),
+    "genre": (
+        "case when genre is null or genre = '' then 1 else 0 end",
+        "lower(coalesce(genre, ''))",
+    ),
+    "release_date": (
+        "case when release_date is null or release_date = '' then 1 else 0 end",
+        "release_date",
+    ),
+    "file_created_at": (
+        "case when file_created_at is null or file_created_at = '' then 1 else 0 end",
+        "file_created_at",
+    ),
     "format": (
         "case when audio_format is null or audio_format = '' then 1 else 0 end",
         "audio_format",
@@ -91,11 +103,17 @@ def get_track_for_spotify_linking(
                     title,
                     artist,
                     album,
+                    comment,
+                    genre,
+                    release_date,
+                    file_created_at,
                     duration_seconds,
                     bitrate,
                     audio_format,
                     artwork_mime,
-                    spotify_uri
+                    spotify_uri,
+                    spotify_link_skipped_at,
+                    indexed_at
                 from tracks
                 where path = ?
                 """,
@@ -109,11 +127,17 @@ def get_track_for_spotify_linking(
                     title,
                     artist,
                     album,
+                    comment,
+                    genre,
+                    release_date,
+                    file_created_at,
                     duration_seconds,
                     bitrate,
                     audio_format,
                     artwork_mime,
-                    spotify_uri
+                    spotify_uri,
+                    spotify_link_skipped_at,
+                    indexed_at
                 from tracks
                 where spotify_uri is null
                   and spotify_link_skipped_at is null
@@ -161,6 +185,25 @@ def skip_track_spotify_link(
             """,
             (datetime.now(timezone.utc).isoformat(), path),
         )
+
+
+def refresh_track_metadata(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+) -> bool:
+    track_path = Path(path)
+    try:
+        stat = track_path.stat()
+    except OSError:
+        return False
+
+    track = read_track_metadata(track_path)
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        _upsert_track(conn, track, size=stat.st_size, mtime_ns=stat.st_mtime_ns)
+
+    return True
 
 
 def refresh_collection_index(
@@ -211,6 +254,7 @@ def query_tracks(
     q: str,
     audio_format: str,
     metadata: str,
+    spotify: str,
     sort: str,
     direction: str,
     page: int,
@@ -225,6 +269,7 @@ def query_tracks(
             q=q,
             audio_format=audio_format,
             metadata=metadata,
+            spotify=spotify,
         )
         total_count = _count(conn, "")
         filtered_count = _count(conn, where_sql, params)
@@ -241,11 +286,17 @@ def query_tracks(
                 title,
                 artist,
                 album,
+                comment,
+                genre,
+                release_date,
+                file_created_at,
                 duration_seconds,
                 bitrate,
                 audio_format,
                 artwork_mime,
-                spotify_uri
+                spotify_uri,
+                spotify_link_skipped_at,
+                indexed_at
             from tracks
             {where_sql}
             order by {missing_expr} asc, {sort_expr} {direction_sql}, lower(path) asc
@@ -285,6 +336,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             title text,
             artist text,
             album text,
+            comment text,
+            genre text,
+            release_date text,
+            file_created_at text,
             duration_seconds real,
             bitrate integer,
             audio_format text,
@@ -300,6 +355,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(conn, "tracks", "artwork_mime", "text")
+    _ensure_column(conn, "tracks", "comment", "text")
+    _ensure_column(conn, "tracks", "genre", "text")
+    _ensure_column(conn, "tracks", "release_date", "text")
+    _ensure_column(conn, "tracks", "file_created_at", "text")
     _ensure_column(conn, "tracks", "artwork_data", "blob")
     _ensure_column(conn, "tracks", "artwork_checked", "integer not null default 0")
     _ensure_column(conn, "tracks", "spotify_uri", "text")
@@ -308,12 +367,20 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("create index if not exists idx_tracks_title on tracks(title)")
     conn.execute("create index if not exists idx_tracks_artist on tracks(artist)")
     conn.execute("create index if not exists idx_tracks_album on tracks(album)")
+    conn.execute("create index if not exists idx_tracks_genre on tracks(genre)")
+    conn.execute(
+        "create index if not exists idx_tracks_release_date on tracks(release_date)"
+    )
     conn.execute("create index if not exists idx_tracks_bitrate on tracks(bitrate)")
     conn.execute(
         "create index if not exists idx_tracks_duration on tracks(duration_seconds)"
     )
     conn.execute(
         "create index if not exists idx_tracks_spotify_uri on tracks(spotify_uri)"
+    )
+    conn.execute(
+        "create index if not exists idx_tracks_spotify_skipped "
+        "on tracks(spotify_link_skipped_at)"
     )
 
 
@@ -323,6 +390,7 @@ def _load_existing_file_state(conn: sqlite3.Connection) -> dict[str, tuple[int, 
         select path, size, mtime_ns
         from tracks
         where artwork_checked = 1
+          and file_created_at is not null
         """
     ).fetchall()
     return {str(path): (int(size), int(mtime_ns)) for path, size, mtime_ns in rows}
@@ -343,6 +411,10 @@ def _upsert_track(
             title,
             artist,
             album,
+            comment,
+            genre,
+            release_date,
+            file_created_at,
             duration_seconds,
             bitrate,
             audio_format,
@@ -354,12 +426,16 @@ def _upsert_track(
             mtime_ns,
             indexed_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(path) do update set
             stem = excluded.stem,
             title = excluded.title,
             artist = excluded.artist,
             album = excluded.album,
+            comment = excluded.comment,
+            genre = excluded.genre,
+            release_date = excluded.release_date,
+            file_created_at = excluded.file_created_at,
             duration_seconds = excluded.duration_seconds,
             bitrate = excluded.bitrate,
             audio_format = excluded.audio_format,
@@ -376,6 +452,10 @@ def _upsert_track(
             track.title,
             track.artist,
             track.album,
+            track.comment,
+            track.genre,
+            track.release_date,
+            track.file_created_at,
             track.duration_seconds,
             track.bitrate,
             track.audio_format,
@@ -405,6 +485,7 @@ def _build_where_clause(
     q: str,
     audio_format: str,
     metadata: str,
+    spotify: str,
 ) -> tuple[str, tuple[object, ...]]:
     parts: list[str] = []
     params: list[object] = []
@@ -416,6 +497,10 @@ def _build_where_clause(
                 coalesce(title, '') || ' ' ||
                 coalesce(artist, '') || ' ' ||
                 coalesce(album, '') || ' ' ||
+                coalesce(comment, '') || ' ' ||
+                coalesce(genre, '') || ' ' ||
+                coalesce(release_date, '') || ' ' ||
+                coalesce(file_created_at, '') || ' ' ||
                 coalesce(audio_format, '') || ' ' ||
                 path
             ) like ?
@@ -446,6 +531,13 @@ def _build_where_clause(
             """
         )
 
+    if spotify == "unlinked":
+        parts.append("spotify_uri is null and spotify_link_skipped_at is null")
+    elif spotify == "linked":
+        parts.append("spotify_uri is not null")
+    elif spotify == "skipped":
+        parts.append("spotify_uri is null and spotify_link_skipped_at is not null")
+
     if not parts:
         return "", ()
 
@@ -468,11 +560,17 @@ def _track_from_row(row: sqlite3.Row) -> LocalTrack:
         title=row["title"],
         artist=row["artist"],
         album=row["album"],
+        comment=row["comment"],
+        genre=row["genre"],
+        release_date=row["release_date"],
+        file_created_at=row["file_created_at"],
         duration_seconds=row["duration_seconds"],
         bitrate=row["bitrate"],
         audio_format=row["audio_format"],
         artwork_mime=row["artwork_mime"],
         spotify_uri=row["spotify_uri"],
+        spotify_link_skipped_at=row["spotify_link_skipped_at"],
+        indexed_at=row["indexed_at"],
     )
 
 

@@ -1,12 +1,18 @@
 from contextlib import asynccontextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 from typing import Any, Literal, cast
-from urllib.parse import parse_qs, urlencode
+from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.request import Request as UrlRequest
+from urllib.request import urlopen
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from crate_digger.collection.index import (
     DEFAULT_COLLECTION_DB_PATH,
@@ -14,23 +20,42 @@ from crate_digger.collection.index import (
     get_track_for_spotify_linking,
     query_tracks,
     refresh_collection_index,
+    refresh_track_metadata,
     set_track_spotify_uri,
     skip_track_spotify_link,
 )
 from crate_digger.collection.models import LocalTrack
+from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.spotify import get_spotify_client
 
-SortKey = Literal["title", "artist", "album", "format", "bitrate", "duration", "path"]
+SortKey = Literal[
+    "title",
+    "artist",
+    "album",
+    "genre",
+    "release_date",
+    "file_created_at",
+    "format",
+    "bitrate",
+    "duration",
+    "path",
+]
 SortDirection = Literal["asc", "desc"]
 MetadataFilter = Literal["all", "missing", "complete"]
+SpotifyFilter = Literal["all", "unlinked", "linked", "skipped"]
 
 DEFAULT_PAGE_SIZE = 10
 SPOTIFY_LINK_LIMIT = 5
+SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS = 12
+MAX_ARTWORK_DOWNLOAD_BYTES = 8 * 1024 * 1024
 SORT_LABELS: dict[SortKey, str] = {
     "title": "Title",
     "artist": "Artist",
     "album": "Album",
+    "genre": "Genre",
+    "release_date": "Released",
+    "file_created_at": "Created",
     "format": "Format",
     "bitrate": "Bitrate",
     "duration": "Duration",
@@ -41,6 +66,12 @@ METADATA_FILTER_LABELS: dict[MetadataFilter, str] = {
     "missing": "Missing tags",
     "complete": "Complete tags",
 }
+SPOTIFY_FILTER_LABELS: dict[SpotifyFilter, str] = {
+    "all": "All Spotify",
+    "unlinked": "Unlinked",
+    "linked": "Linked",
+    "skipped": "Skipped",
+}
 
 
 @dataclass(frozen=True)
@@ -48,6 +79,7 @@ class CollectionQuery:
     q: str
     audio_format: str
     metadata: MetadataFilter
+    spotify: SpotifyFilter
     sort: SortKey
     direction: SortDirection
     page: int
@@ -98,6 +130,7 @@ def create_app(
         q: str = "",
         audio_format: str = Query("", alias="format"),
         metadata: str = "all",
+        spotify: str = "all",
         sort: str = "title",
         direction: str = "asc",
         page: int = 1,
@@ -107,6 +140,7 @@ def create_app(
             q=q,
             audio_format=audio_format,
             metadata=metadata,
+            spotify=spotify,
             sort=sort,
             direction=direction,
             page=page,
@@ -126,6 +160,7 @@ def create_app(
         q: str = "",
         audio_format: str = Query("", alias="format"),
         metadata: str = "all",
+        spotify: str = "all",
         sort: str = "title",
         direction: str = "asc",
         page: int = 1,
@@ -136,6 +171,7 @@ def create_app(
             q=q,
             audio_format=audio_format,
             metadata=metadata,
+            spotify=spotify,
             sort=sort,
             direction=direction,
             page=page,
@@ -144,11 +180,13 @@ def create_app(
         return HTMLResponse(_render_index(view, collection["music_dirs"]))
 
     @app.get("/spotify-link", response_class=HTMLResponse)
-    def spotify_link(
+    async def spotify_link(
         path: str | None = None,
         offset: int = 0,
         partial: bool = False,
+        return_to: str = "/",
     ) -> HTMLResponse:
+        safe_return_to = _safe_return_to(return_to)
         collection = get_settings(config_path)["collection"]
         if path is None:
             return HTMLResponse(_render_spotify_link_idle(collection["music_dirs"]))
@@ -157,12 +195,9 @@ def create_app(
         if track is None:
             return HTMLResponse(_render_spotify_link_done(collection["music_dirs"]))
 
-        spotify_config = get_settings(config_path)["spotify"]
-        sp = get_spotify_client(" ".join(spotify_config["scopes"]))
-        search_query = _spotify_search_query(track)
-        candidates = _search_spotify_candidates(
-            sp,
-            search_query,
+        candidates, lookup_error = await _search_spotify_candidates_for_track(
+            config_path=config_path,
+            track=track,
             offset=max(0, offset),
             limit=SPOTIFY_LINK_LIMIT,
         )
@@ -173,6 +208,8 @@ def create_app(
                     candidates=candidates,
                     offset=max(0, offset),
                     partial=True,
+                    return_to=safe_return_to,
+                    lookup_error=lookup_error,
                 )
             )
 
@@ -182,23 +219,73 @@ def create_app(
                 candidates=candidates,
                 offset=max(0, offset),
                 music_dirs=collection["music_dirs"],
+                return_to=safe_return_to,
+                lookup_error=lookup_error,
             )
         )
 
     @app.post("/spotify-link/link")
-    async def link_spotify_track(request: Request) -> RedirectResponse:
+    async def link_spotify_track(
+        request: Request,
+    ) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
         path = form["path"]
         spotify_uri = form["spotify_uri"]
         set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
-        return RedirectResponse("/", status_code=303)
+        return_to = _safe_return_to(form.get("return_to"))
+        art_replaced = await run_in_threadpool(
+            _replace_track_artwork_from_url,
+            db_path,
+            path=path,
+            image_url=form.get("image_url"),
+        )
+        if art_replaced:
+            return_to = _with_art_refresh(return_to)
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/spotify-link/quick-link")
+    async def quick_link_spotify_track(
+        request: Request,
+    ) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        return_to = _safe_return_to(form.get("return_to"))
+        path = form["path"]
+        track = get_track_for_spotify_linking(db_path, path=path)
+        if track is None:
+            return RedirectResponse(return_to, status_code=303)
+
+        candidates, _lookup_error = await _search_spotify_candidates_for_track(
+            config_path=config_path,
+            track=track,
+            offset=0,
+            limit=1,
+        )
+        if not candidates:
+            fallback = _spotify_link_href(
+                track=track,
+                offset=0,
+                return_to=return_to,
+                partial=False,
+            )
+            return RedirectResponse(fallback, status_code=303)
+
+        set_track_spotify_uri(db_path, path=path, spotify_uri=candidates[0].uri)
+        art_replaced = await run_in_threadpool(
+            _replace_track_artwork_from_url,
+            db_path,
+            path=path,
+            image_url=candidates[0].image_url,
+        )
+        if art_replaced:
+            return_to = _with_art_refresh(return_to)
+        return RedirectResponse(return_to, status_code=303)
 
     @app.post("/spotify-link/skip")
     async def skip_spotify_track(request: Request) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
         path = form["path"]
         skip_track_spotify_link(db_path, path=path)
-        return RedirectResponse("/", status_code=303)
+        return RedirectResponse(_safe_return_to(form.get("return_to")), status_code=303)
 
     @app.get("/art")
     def artwork(track_path: str = Query(..., alias="path")) -> Response:
@@ -206,7 +293,11 @@ def create_app(
         if result is None:
             return Response(status_code=404)
         mime, data = result
-        return Response(content=data, media_type=mime)
+        return Response(
+            content=data,
+            media_type=mime,
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
 
     @app.post("/reindex")
     def reindex() -> RedirectResponse:
@@ -226,11 +317,17 @@ def _track_to_json(track: LocalTrack) -> dict[str, object]:
         "title": track.title,
         "artist": track.artist,
         "album": track.album,
+        "comment": track.comment,
+        "genre": track.genre,
+        "release_date": track.release_date,
+        "file_created_at": track.file_created_at,
         "duration_seconds": track.duration_seconds,
         "bitrate": track.bitrate,
         "audio_format": track.audio_format,
         "has_artwork": track.artwork_mime is not None,
         "spotify_uri": track.spotify_uri,
+        "spotify_link_skipped_at": track.spotify_link_skipped_at,
+        "indexed_at": track.indexed_at,
     }
 
 
@@ -239,8 +336,182 @@ def _parse_urlencoded_form(body: bytes) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items() if values}
 
 
+def _replace_track_artwork_from_url(
+    db_path: Path,
+    *,
+    path: str,
+    image_url: str | None,
+) -> bool:
+    if not image_url:
+        return False
+
+    artwork = _download_spotify_artwork(image_url)
+    if artwork is None:
+        return False
+
+    mime, data = artwork
+    if overwrite_embedded_artwork(Path(path), mime=mime, data=data):
+        return refresh_track_metadata(db_path, path=path)
+    return False
+
+
+def _download_spotify_artwork(url: str) -> tuple[str, bytes] | None:
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    request = UrlRequest(url, headers={"User-Agent": "crate-digger/1.0"})
+    try:
+        with urlopen(request, timeout=10) as response:
+            data = response.read(MAX_ARTWORK_DOWNLOAD_BYTES + 1)
+            mime = response.headers.get_content_type()
+    except OSError:
+        return None
+
+    if len(data) > MAX_ARTWORK_DOWNLOAD_BYTES:
+        return None
+    inferred_mime = _infer_image_mime(data)
+    if inferred_mime is None:
+        return None
+    if mime not in {"image/jpeg", "image/png"}:
+        mime = inferred_mime
+    return mime, data
+
+
+def _infer_image_mime(data: bytes) -> str | None:
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    return None
+
+
+def _safe_return_to(value: str | None) -> str:
+    if not value:
+        return "/"
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme
+        or parsed.netloc
+        or not value.startswith("/")
+        or value.startswith("//")
+    ):
+        return "/"
+    return value
+
+
+def _with_art_refresh(return_to: str) -> str:
+    parsed = urlsplit(return_to)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query["art_refresh"] = "1"
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path or "/",
+            urlencode(query),
+            parsed.fragment,
+        )
+    )
+
+
 def _spotify_search_query(track: LocalTrack) -> str:
     return f"{track.display_artist} - {track.display_title}"
+
+
+async def _search_spotify_candidates_for_track(
+    *,
+    config_path: str,
+    track: LocalTrack,
+    offset: int,
+    limit: int,
+) -> tuple[list[SpotifyCandidate], str | None]:
+    query = _spotify_search_query(track)
+    try:
+        candidates = await run_in_threadpool(
+            _search_spotify_candidates_from_config_with_timeout,
+            config_path,
+            query,
+            offset=offset,
+            limit=limit,
+            timeout_seconds=SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        return [], "Spotify lookup timed out. Try again in a moment."
+    except Exception as exc:
+        return [], f"Spotify lookup failed: {_short_error(exc)}"
+    return candidates, None
+
+
+def _search_spotify_candidates_from_config_with_timeout(
+    config_path: str,
+    query: str,
+    *,
+    offset: int,
+    limit: int,
+    timeout_seconds: float,
+) -> list[SpotifyCandidate]:
+    return _run_spotify_lookup_with_timeout(
+        lambda: _search_spotify_candidates_from_config(
+            config_path,
+            query,
+            offset=offset,
+            limit=limit,
+        ),
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _search_spotify_candidates_from_config(
+    config_path: str,
+    query: str,
+    *,
+    offset: int,
+    limit: int,
+) -> list[SpotifyCandidate]:
+    spotify_config = get_settings(config_path)["spotify"]
+    sp = get_spotify_client(" ".join(spotify_config["scopes"]))
+    return _search_spotify_candidates(
+        sp,
+        query,
+        offset=offset,
+        limit=limit,
+    )
+
+
+def _run_spotify_lookup_with_timeout(
+    callback: Callable[[], list[SpotifyCandidate]],
+    *,
+    timeout_seconds: float,
+) -> list[SpotifyCandidate]:
+    results: Queue[tuple[str, list[SpotifyCandidate] | BaseException]] = Queue(
+        maxsize=1
+    )
+
+    def run() -> None:
+        try:
+            results.put(("result", callback()))
+        except BaseException as exc:
+            results.put(("error", exc))
+
+    Thread(target=run, name="spotify-link-lookup", daemon=True).start()
+
+    try:
+        kind, value = results.get(timeout=timeout_seconds)
+    except Empty as exc:
+        raise TimeoutError(f"Spotify lookup exceeded {timeout_seconds:g}s") from exc
+
+    if kind == "error":
+        assert isinstance(value, BaseException)
+        raise value
+    return cast(list[SpotifyCandidate], value)
+
+
+def _short_error(error: Exception) -> str:
+    message = str(error).strip()
+    if not message:
+        message = error.__class__.__name__
+    return message[:180]
 
 
 def _search_spotify_candidates(
@@ -309,6 +580,7 @@ def _build_collection_view(
     q: str,
     audio_format: str,
     metadata: str,
+    spotify: str,
     sort: str,
     direction: str,
     page: int,
@@ -318,6 +590,7 @@ def _build_collection_view(
         q=q,
         audio_format=audio_format,
         metadata=metadata,
+        spotify=spotify,
         sort=sort,
         direction=direction,
         page=page,
@@ -328,6 +601,7 @@ def _build_collection_view(
         q=query.q,
         audio_format=query.audio_format,
         metadata=query.metadata,
+        spotify=query.spotify,
         sort=query.sort,
         direction=query.direction,
         page=query.page,
@@ -337,6 +611,7 @@ def _build_collection_view(
         q=query.q,
         audio_format=query.audio_format,
         metadata=query.metadata,
+        spotify=query.spotify,
         sort=query.sort,
         direction=query.direction,
         page=result.page,
@@ -358,6 +633,7 @@ def _normalize_query(
     q: str,
     audio_format: str,
     metadata: str,
+    spotify: str,
     sort: str,
     direction: str,
     page: int,
@@ -366,6 +642,10 @@ def _normalize_query(
     normalized_metadata: MetadataFilter = "all"
     if metadata in METADATA_FILTER_LABELS:
         normalized_metadata = cast(MetadataFilter, metadata)
+
+    normalized_spotify: SpotifyFilter = "all"
+    if spotify in SPOTIFY_FILTER_LABELS:
+        normalized_spotify = cast(SpotifyFilter, spotify)
 
     normalized_sort: SortKey = "title"
     if sort in SORT_LABELS:
@@ -379,6 +659,7 @@ def _normalize_query(
         q=q.strip(),
         audio_format=audio_format.strip().upper(),
         metadata=normalized_metadata,
+        spotify=normalized_spotify,
         sort=normalized_sort,
         direction=normalized_direction,
         page=max(1, page),
@@ -386,8 +667,11 @@ def _normalize_query(
     )
 
 
-def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
-    rows = "\n".join(_render_track_row(track) for track in view.tracks)
+def _render_index(
+    view: CollectionView,
+    music_dirs: list[str],
+) -> str:
+    rows = "\n".join(_render_track_row(track, view) for track in view.tracks)
     empty = ""
     if not music_dirs:
         empty = '<p class="empty">No collection directories configured.</p>'
@@ -470,7 +754,7 @@ def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
     }}
     .controls {{
       display: grid;
-      grid-template-columns: minmax(220px, 1fr) repeat(2, minmax(130px, auto)) auto;
+      grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, auto)) auto;
       gap: 10px;
       align-items: end;
       margin-bottom: 10px;
@@ -537,13 +821,26 @@ def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
       color: var(--muted);
     }}
     .spotify-cell {{
-      width: 88px;
+      width: 150px;
+    }}
+    .spotify-actions {{
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }}
+    .spotify-actions form {{
+      margin: 0;
     }}
     .spotify-action {{
       height: 28px;
       padding: 0 10px;
       color: var(--accent);
       font-size: 13px;
+    }}
+    button.spotify-action {{
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
     }}
     .spotify-linked {{
       color: var(--muted);
@@ -758,7 +1055,9 @@ def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
         grid-template-columns: 1fr;
       }}
       th:nth-child(4), td:nth-child(4),
-      th:nth-child(6), td:nth-child(6) {{
+      th:nth-child(5), td:nth-child(5),
+      th:nth-child(7), td:nth-child(7),
+      th:nth-child(9), td:nth-child(9) {{
         display: none;
       }}
       th, td {{
@@ -791,12 +1090,15 @@ def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
       <thead>
         <tr>
           <th class="cover-cell"></th>
-          <th style="width: 27%">{_sort_link(view, "title")}</th>
-          <th style="width: 16%">{_sort_link(view, "artist")}</th>
-          <th style="width: 18%">{_sort_link(view, "album")}</th>
-          <th style="width: 9%">{_sort_link(view, "format")}</th>
-          <th style="width: 10%">{_sort_link(view, "bitrate")}</th>
-          <th style="width: 12%">{_sort_link(view, "duration")}</th>
+          <th style="width: 20%">{_sort_link(view, "title")}</th>
+          <th style="width: 12%">{_sort_link(view, "artist")}</th>
+          <th style="width: 13%">{_sort_link(view, "album")}</th>
+          <th style="width: 8%">{_sort_link(view, "genre")}</th>
+          <th style="width: 8%">{_sort_link(view, "release_date")}</th>
+          <th style="width: 8%">{_sort_link(view, "file_created_at")}</th>
+          <th style="width: 7%">{_sort_link(view, "format")}</th>
+          <th style="width: 8%">{_sort_link(view, "bitrate")}</th>
+          <th style="width: 7%">{_sort_link(view, "duration")}</th>
           <th class="spotify-cell">Spotify</th>
         </tr>
       </thead>
@@ -820,6 +1122,25 @@ def _render_index(view: CollectionView, music_dirs: list[str]) -> str:
         spotifyDialog.showModal();
         const response = await fetch(url, {{ headers: {{ "X-Requested-With": "fetch" }} }});
         spotifyDialogContent.innerHTML = await response.text();
+      }}
+
+      function refreshCoverImages() {{
+        document.querySelectorAll("img.cover").forEach((image) => {{
+          const url = new URL(image.src);
+          url.searchParams.set("refresh", Date.now().toString());
+          image.src = url.toString();
+        }});
+      }}
+
+      const pageParams = new URLSearchParams(window.location.search);
+      if (pageParams.get("art_refresh") === "1") {{
+        pageParams.delete("art_refresh");
+        const cleanQuery = pageParams.toString();
+        const cleanUrl = `${{window.location.pathname}}${{cleanQuery ? `?${{cleanQuery}}` : ""}}`;
+        window.history.replaceState(null, "", cleanUrl);
+        [0, 750, 2000].forEach((delay) => {{
+          window.setTimeout(refreshCoverImages, delay);
+        }});
       }}
 
       document.addEventListener("click", (event) => {{
@@ -851,6 +1172,11 @@ def _render_controls(view: CollectionView) -> str:
         f"{escape(label)}</option>"
         for key, label in METADATA_FILTER_LABELS.items()
     )
+    spotify_options = "\n".join(
+        f'<option value="{escape(key)}" {_selected(view.query.spotify, key)}>'
+        f"{escape(label)}</option>"
+        for key, label in SPOTIFY_FILTER_LABELS.items()
+    )
     return f"""<form class="controls" method="get">
   <label>
     Search
@@ -866,6 +1192,12 @@ def _render_controls(view: CollectionView) -> str:
     Tags
     <select name="metadata">
       {metadata_options}
+    </select>
+  </label>
+  <label>
+    Spotify
+    <select name="spotify">
+      {spotify_options}
     </select>
   </label>
   <input type="hidden" name="sort" value="{escape(view.query.sort)}">
@@ -921,13 +1253,23 @@ def _render_spotify_link_page(
     candidates: list[SpotifyCandidate],
     offset: int,
     music_dirs: list[str],
+    return_to: str,
+    lookup_error: str | None,
 ) -> str:
+    content = _render_spotify_link_content(
+        track=track,
+        candidates=candidates,
+        offset=offset,
+        partial=False,
+        return_to=return_to,
+        lookup_error=lookup_error,
+    )
     return _render_page_shell(
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
         body=f"""
   <main class="wrap">
-    {_render_spotify_link_content(track=track, candidates=candidates, offset=offset, partial=False)}
+    {content}
   </main>
 """,
     )
@@ -939,28 +1281,56 @@ def _render_spotify_link_content(
     candidates: list[SpotifyCandidate],
     offset: int,
     partial: bool,
+    return_to: str,
+    lookup_error: str | None,
 ) -> str:
     candidate_rows = "\n".join(
-        _render_spotify_candidate(track, candidate) for candidate in candidates
+        _render_spotify_candidate(track, candidate, return_to)
+        for candidate in candidates
     )
     if not candidate_rows:
         candidate_rows = '<p class="empty">No Spotify results for this query.</p>'
+    if lookup_error:
+        candidate_rows = f'<p class="empty">{escape(lookup_error)}</p>'
 
     next_offset = offset + SPOTIFY_LINK_LIMIT
     previous_offset = max(0, offset - SPOTIFY_LINK_LIMIT)
-    previous_href = f"/spotify-link?{urlencode({'path': str(track.path), 'offset': previous_offset})}"
-    next_href = (
-        f"/spotify-link?{urlencode({'path': str(track.path), 'offset': next_offset})}"
+    previous_href = _spotify_link_href(
+        track=track,
+        offset=previous_offset,
+        return_to=return_to,
+        partial=False,
     )
-    previous_modal_url = f"{previous_href}&partial=1"
-    next_modal_url = f"{next_href}&partial=1"
-    collection_link = '<a class="button" href="/">Collection</a>' if not partial else ""
+    next_href = _spotify_link_href(
+        track=track,
+        offset=next_offset,
+        return_to=return_to,
+        partial=False,
+    )
+    previous_modal_url = _spotify_link_href(
+        track=track,
+        offset=previous_offset,
+        return_to=return_to,
+        partial=True,
+    )
+    next_modal_url = _spotify_link_href(
+        track=track,
+        offset=next_offset,
+        return_to=return_to,
+        partial=True,
+    )
+    collection_link = (
+        f'<a class="button" href="{escape(return_to)}">Collection</a>'
+        if not partial
+        else ""
+    )
 
     return f"""
     <div class="linkbar">
       {collection_link}
       <form method="post" action="/spotify-link/skip">
         <input type="hidden" name="path" value="{escape(str(track.path))}">
+        <input type="hidden" name="return_to" value="{escape(return_to)}">
         <button type="submit">Skip</button>
       </form>
       <a class="button" href="{escape(previous_href)}" data-spotify-modal-url="{escape(previous_modal_url)}">Previous results</a>
@@ -987,6 +1357,7 @@ def _render_spotify_link_content(
 def _render_spotify_candidate(
     track: LocalTrack,
     candidate: SpotifyCandidate,
+    return_to: str,
 ) -> str:
     external_link = ""
     if candidate.external_url:
@@ -995,6 +1366,12 @@ def _render_spotify_candidate(
             'target="_blank" rel="noreferrer">Open</a>'
         )
     cover = _render_candidate_cover(candidate)
+    image_input = ""
+    if candidate.image_url:
+        image_input = (
+            f'<input type="hidden" name="image_url" '
+            f'value="{escape(candidate.image_url)}">'
+        )
     return f"""<div class="candidate">
   {cover}
   <div>
@@ -1008,10 +1385,29 @@ def _render_spotify_candidate(
     <form method="post" action="/spotify-link/link">
       <input type="hidden" name="path" value="{escape(str(track.path))}">
       <input type="hidden" name="spotify_uri" value="{escape(candidate.uri)}">
+      {image_input}
+      <input type="hidden" name="return_to" value="{escape(return_to)}">
       <button type="submit">Link</button>
     </form>
   </div>
 </div>"""
+
+
+def _spotify_link_href(
+    *,
+    track: LocalTrack,
+    offset: int,
+    return_to: str,
+    partial: bool,
+) -> str:
+    params: dict[str, object] = {
+        "path": str(track.path),
+        "offset": offset,
+        "return_to": return_to,
+    }
+    if partial:
+        params["partial"] = 1
+    return f"/spotify-link?{urlencode(params)}"
 
 
 def _render_candidate_cover(candidate: SpotifyCandidate) -> str:
@@ -1245,6 +1641,7 @@ def _url_for(view: CollectionView, **overrides: object) -> str:
         "q": view.query.q,
         "format": view.query.audio_format,
         "metadata": view.query.metadata,
+        "spotify": view.query.spotify,
         "sort": view.query.sort,
         "direction": view.query.direction,
         "page": view.query.page,
@@ -1262,8 +1659,10 @@ def _selected(current: object, value: object) -> str:
     return "selected" if current == value else ""
 
 
-def _render_track_row(track: LocalTrack) -> str:
-    return f"""<tr>
+def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
+    spotify_action = _render_spotify_action(track, return_to=_url_for(view))
+    comment_attr = f' title="{escape(track.comment)}"' if track.comment else ""
+    return f"""<tr{comment_attr}>
   <td class="cover-cell">{_render_cover(track)}</td>
   <td>
     <div class="track-title">{escape(track.display_title)}</div>
@@ -1271,25 +1670,57 @@ def _render_track_row(track: LocalTrack) -> str:
   </td>
   <td>{escape(track.display_artist)}</td>
   <td>{escape(track.album or "")}</td>
+  <td>{escape(track.genre or "")}</td>
+  <td>{escape(track.release_date or "")}</td>
+  <td>{escape(_format_date(track.file_created_at))}</td>
   <td><span class="pill">{escape(track.audio_format or "?")}</span></td>
   <td>{escape(_format_bitrate(track.bitrate))}</td>
   <td>{escape(_format_duration(track.duration_seconds))}</td>
-  <td class="spotify-cell">{_render_spotify_action(track)}</td>
+  <td class="spotify-cell">{spotify_action}</td>
 </tr>"""
 
 
-def _render_spotify_action(track: LocalTrack) -> str:
+def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
     if track.spotify_uri:
         external_url = _spotify_external_url_from_uri(track.spotify_uri)
         if external_url:
-            return (
+            linked = (
                 f'<a class="spotify-linked" href="{escape(external_url)}" '
                 'target="_blank" rel="noreferrer">Linked</a>'
             )
-        return '<span class="spotify-linked">Linked</span>'
+        else:
+            linked = '<span class="spotify-linked">Linked</span>'
+        return f"""<div class="spotify-actions">
+  {linked}
+  {_manual_spotify_link(track, return_to=return_to)}
+</div>"""
 
-    href = f"/spotify-link?{urlencode({'path': str(track.path)})}"
-    modal_url = f"{href}&partial=1"
+    if track.spotify_link_skipped_at:
+        return '<span class="spotify-linked">Skipped</span>'
+
+    return f"""<div class="spotify-actions">
+  <form method="post" action="/spotify-link/quick-link">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    <button class="spotify-action" type="submit">Link</button>
+  </form>
+  {_manual_spotify_link(track, return_to=return_to)}
+</div>"""
+
+
+def _manual_spotify_link(track: LocalTrack, *, return_to: str) -> str:
+    href = _spotify_link_href(
+        track=track,
+        offset=0,
+        return_to=return_to,
+        partial=False,
+    )
+    modal_url = _spotify_link_href(
+        track=track,
+        offset=0,
+        return_to=return_to,
+        partial=True,
+    )
     return (
         f'<a class="button spotify-action" href="{escape(href)}" '
         f'data-spotify-modal-url="{escape(modal_url)}">Find</a>'
@@ -1306,7 +1737,10 @@ def _spotify_external_url_from_uri(uri: str) -> str | None:
 def _render_cover(track: LocalTrack) -> str:
     if track.artwork_mime is None:
         return '<span class="cover cover-placeholder"></span>'
-    src = f"/art?{urlencode({'path': str(track.path)})}"
+    params = {"path": str(track.path)}
+    if track.indexed_at:
+        params["v"] = track.indexed_at
+    src = f"/art?{urlencode(params)}"
     return f'<img class="cover" src="{escape(src)}" alt="">'
 
 
@@ -1321,6 +1755,12 @@ def _format_bitrate(bitrate: int | None) -> str:
     if not bitrate:
         return ""
     return f"{round(bitrate / 1000)} kbps"
+
+
+def _format_date(value: str | None) -> str:
+    if not value:
+        return ""
+    return value[:10]
 
 
 def _format_duration(duration_seconds: float | None) -> str:
