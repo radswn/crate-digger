@@ -15,6 +15,9 @@ def test_load_config_valid(tmp_path):
         to-download-playlist = "pl:download"
         acapella-playlist = "pl:acapella"
         scopes = ["a", "b"]
+
+        [collection]
+        music-dirs = ["/music", "~/Downloads/tracks"]
         """
     )
     cfg_file = tmp_path / "config.toml"
@@ -28,6 +31,27 @@ def test_load_config_valid(tmp_path):
     assert cfg["spotify"]["to_download_playlist"] == "pl:download"
     assert cfg["spotify"]["acapella_playlist"] == "pl:acapella"
     assert cfg["spotify"]["scopes"] == ["a", "b"]
+    assert cfg["collection"]["music_dirs"] == ["/music", "~/Downloads/tracks"]
+
+
+def test_load_config_defaults_collection(tmp_path):
+    config_text = textwrap.dedent(
+        """
+        [spotify]
+        to-listen-playlist = "pl:1"
+        test-playlist = "pl:test"
+        followed-labels-playlist = "pl:labels"
+        to-download-playlist = "pl:download"
+        acapella-playlist = "pl:acapella"
+        scopes = ["a", "b"]
+        """
+    )
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(config_text)
+
+    cfg = load_config(cfg_file)
+
+    assert cfg["collection"]["music_dirs"] == []
 
 
 def test_load_config_requires_sections(tmp_path):

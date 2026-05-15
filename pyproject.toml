@@ -12,6 +12,10 @@ dependencies = [
 ]
 
 [dependency-groups]
+dashboard = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+]
 dev = [
     "pytest>=8.4.1,<9",
     "jupyter>=1.1.1,<2",

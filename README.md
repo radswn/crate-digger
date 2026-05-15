@@ -5,6 +5,7 @@ A Python application that discovers new music releases and automates Spotify pla
 **Features:**
 - 🎵 Auto-fetch new releases weekly from labels represented in a Spotify playlist
 - 🎯 Intelligent deduplication and extended version filtering
+- 💿 Local collection dashboard for browsing downloaded audio files
 - 📱 Compact Telegram summaries for new releases and followed-label changes
 - 📚 Historical backfill when a new label is added to the followed playlist
 - 🔄 Cached authentication for seamless operation
@@ -19,7 +20,13 @@ src/crate_digger/
 ├── main/
 │   ├── fetch_new_releases.py      # Scheduled release fetcher (main entry point)
 │   ├── backfill_label_history.py  # Historical backfill script
+│   ├── serve_dashboard.py         # Local collection dashboard server
 │   └── export_playlist.py         # Text exports for configured playlists
+├── collection/
+│   ├── models.py                  # Local collection data structures
+│   └── scanner.py                 # Filesystem discovery and tag extraction
+├── web/
+│   └── app.py                     # FastAPI localhost dashboard
 ├── utils/
 │   ├── spotify.py                 # Spotify API helpers (fetch, filter, dedupe)
 │   ├── config.py                  # Config loading & validation
@@ -72,6 +79,11 @@ scopes = [
     "playlist-read-private",
     "user-library-read",
 ]
+
+[collection]
+music-dirs = [
+    "~/Music",
+]
 ```
 
 Create the followed-label playlist in Spotify and add one representative track from each label you want to follow. The app reads each track's album label metadata and deduplicates the resulting label list.
@@ -116,6 +128,9 @@ uv run python -m crate_digger.main.export_playlist to-download wishlist.txt
 
 # Export the acapella playlist to artist-title lines
 uv run python -m crate_digger.main.export_playlist acapella acapella.txt
+
+# Run the local collection dashboard
+make dashboard
 ```
 
 ## Usage
@@ -163,6 +178,18 @@ uv run python -m crate_digger.main.export_playlist acapella acapella.txt
 - Writes one track per line in `Artist 1, Artist 2 - Track Title` format
 - Also available as `make export-acapella-playlist ACAPELLA_OUTPUT=acapella.txt`
 
+### Local Collection Dashboard
+
+```bash
+make dashboard
+```
+
+- Serves a FastAPI dashboard at <http://127.0.0.1:8765>
+- Reads configured folders from `collection.music-dirs`
+- Recursively lists supported audio files and lightweight tag metadata
+- Exposes the same data as JSON at `/api/tracks`
+- Uses the `dashboard` dependency group, so `uv` installs the web dependencies on demand
+
 ## Testing
 
 ```bash
@@ -190,6 +217,7 @@ uv run pytest tests/test_spotify.py
 - **`spotify.to-download-playlist`** (string) – Playlist URI exported by `export_playlist to-download`
 - **`spotify.acapella-playlist`** (string) – Playlist URI exported by `export_playlist acapella`
 - **`spotify.scopes`** (list of strings) – OAuth scopes required
+- **`collection.music-dirs`** (list of strings) – Optional local folders scanned by the dashboard
 
 **Validation:**
 - Required sections: `[spotify]`

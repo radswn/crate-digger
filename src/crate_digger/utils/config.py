@@ -15,8 +15,15 @@ class SpotifyConfig(TypedDict):
     scopes: List[str]
 
 
+class CollectionConfig(TypedDict):
+    """Expected structure of the optional `[collection]` section."""
+
+    music_dirs: List[str]
+
+
 class AppConfig(TypedDict):
     spotify: SpotifyConfig
+    collection: CollectionConfig
 
 
 def _require_keys(section: Dict, required: List[str], section_name: str) -> None:
@@ -120,7 +127,19 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
         ),
     }
 
-    return {"spotify": spotify_cfg}
+    collection_section = raw.get("collection", {})
+    if not isinstance(collection_section, dict):
+        raise ValueError("Expected [collection] section to be a table")
+
+    collection_cfg: CollectionConfig = {
+        "music_dirs": _validate_list_of_strings(
+            collection_section.get("music-dirs", []),
+            "music-dirs",
+            "collection",
+        )
+    }
+
+    return {"spotify": spotify_cfg, "collection": collection_cfg}
 
 
 @lru_cache(maxsize=1)

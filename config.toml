@@ -9,3 +9,8 @@ scopes = [
     "playlist-read-private",
     "user-library-read",
 ]
+
+[collection]
+music-dirs = [
+    "/mnt/c/Users/Radek/Music/download"
+]
