@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Sequence
 
 
-DEFAULT_STATE_PATH = Path(".crate_digger_state") / "followed_labels.json"
-DEFAULT_BACKFILLED_LABELS_PATH = Path(".crate_digger_state") / "backfilled_labels.json"
+DEFAULT_PIPELINE_STATE_DIR = Path(".crate_digger_state") / "fetch_pipeline"
+DEFAULT_STATE_PATH = DEFAULT_PIPELINE_STATE_DIR / "followed_labels.json"
+DEFAULT_BACKFILLED_LABELS_PATH = DEFAULT_PIPELINE_STATE_DIR / "backfilled_labels.json"
+LEGACY_STATE_PATH = Path(".crate_digger_state") / "followed_labels.json"
+LEGACY_BACKFILLED_LABELS_PATH = Path(".crate_digger_state") / "backfilled_labels.json"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ def load_followed_labels_state(
 ) -> list[str] | None:
     """Load the previously followed labels, if state exists."""
 
+    state_path = _with_legacy_fallback(state_path, LEGACY_STATE_PATH)
     if not state_path.exists():
         return None
 
@@ -71,6 +75,7 @@ def load_cached_backfilled_labels(
 ) -> list[str]:
     """Load labels this app has backfilled itself."""
 
+    state_path = _with_legacy_fallback(state_path, LEGACY_BACKFILLED_LABELS_PATH)
     if not state_path.exists():
         return []
 
@@ -121,3 +126,11 @@ def compute_followed_label_changes(
     return FollowedLabelChanges(
         current=current, added=added, removed=removed, initialized=False
     )
+
+
+def _with_legacy_fallback(state_path: Path, legacy_path: Path) -> Path:
+    if state_path == DEFAULT_STATE_PATH and not state_path.exists():
+        return legacy_path
+    if state_path == DEFAULT_BACKFILLED_LABELS_PATH and not state_path.exists():
+        return legacy_path
+    return state_path

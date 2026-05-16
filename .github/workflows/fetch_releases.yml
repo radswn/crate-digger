@@ -49,7 +49,10 @@ jobs:
         run: aws s3 cp s3://radswn-spotify-auth-cache/.spotipy_cache .spotipy_cache --recursive
 
       - name: Download followed-label state from S3
-        run: aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state .crate_digger_state --recursive || true
+        run: |
+          aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/fetch_pipeline .crate_digger_state/fetch_pipeline --recursive || true
+          aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/followed_labels.json .crate_digger_state/followed_labels.json || true
+          aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/backfilled_labels.json .crate_digger_state/backfilled_labels.json || true
 
       - name: Run script for fetching new releases
         env:
@@ -66,4 +69,4 @@ jobs:
 
       - name: Upload followed-label state back to S3
         if: always()
-        run: if [ -d .crate_digger_state ]; then aws s3 cp .crate_digger_state s3://radswn-spotify-auth-cache/.crate_digger_state --recursive; fi
+        run: if [ -d .crate_digger_state/fetch_pipeline ]; then aws s3 cp .crate_digger_state/fetch_pipeline s3://radswn-spotify-auth-cache/.crate_digger_state/fetch_pipeline --recursive; fi

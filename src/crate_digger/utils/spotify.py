@@ -1,11 +1,14 @@
+import os
 import re
+import sys
 import time
-
-import pandas as pd
-
+from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
+
+import pandas as pd
+
 from dotenv import load_dotenv
 
 from spotipy import Spotify
@@ -24,6 +27,62 @@ from crate_digger.utils.types import SpotifyAlbum, SpotifyTrack
 
 logger = get_logger(__name__)
 
+SPOTIFY_REQUEST_TIMEOUT_SECONDS = 10
+SPOTIFY_RETRIES = 2
+SPOTIFY_BACKOFF_FACTOR = 0.5
+SPOTIFY_RETRY_STATUSES = (429, 500, 502, 503, 504)
+
+
+class SpotifyTokenCacheError(RuntimeError):
+    """Raised when non-interactive Spotify auth cannot use the token cache."""
+
+
+class NonInteractiveSpotifyOAuth(SpotifyOAuth):
+    """SpotifyOAuth variant that never prompts for a browser callback."""
+
+    def get_auth_response(self, *args: Any, **kwargs: Any) -> str:
+        raise SpotifyTokenCacheError(
+            "Spotify OAuth requires an interactive login, but this client was "
+            "created with browser auth disabled."
+        )
+
+
+class LockedCacheFileHandler(CacheFileHandler):
+    """Spotipy cache handler guarded by a sidecar lock file."""
+
+    def __init__(self, cache_path: Path) -> None:
+        self._lock_path = cache_path.with_name(f"{cache_path.name}.lock")
+        super().__init__(cache_path=str(cache_path))
+
+    def get_cached_token(self) -> dict[str, Any] | None:
+        with self._cache_lock():
+            try:
+                return super().get_cached_token()
+            except (OSError, ValueError) as exc:
+                raise SpotifyTokenCacheError(
+                    f"Could not read Spotify token cache {self.cache_path!r}: {exc}"
+                ) from exc
+
+    def save_token_to_cache(self, token_info: dict[str, Any]) -> None:
+        with self._cache_lock():
+            super().save_token_to_cache(token_info)
+
+    @contextmanager
+    def _cache_lock(self):
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_path.open("a+", encoding="utf-8") as lock_file:
+            try:
+                import fcntl
+            except ImportError:
+                yield
+                return
+
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
 
 def sleep_between_requests(delay_seconds: float) -> None:
     """Pause between API calls during broad backfills."""
@@ -32,11 +91,17 @@ def sleep_between_requests(delay_seconds: float) -> None:
         time.sleep(delay_seconds)
 
 
-def get_spotify_client(scope: str) -> Spotify:
+def get_spotify_client(
+    scope: str,
+    *,
+    allow_browser_auth: bool | None = None,
+) -> Spotify:
     """Create and return an authenticated Spotify client with cached OAuth token.
 
     Args:
         scope: OAuth scope string for Spotify API permissions
+        allow_browser_auth: Whether Spotipy may open an OAuth browser prompt. Defaults
+            to true only for interactive local shells.
 
     Returns:
         Authenticated Spotify client instance
@@ -44,21 +109,78 @@ def get_spotify_client(scope: str) -> Spotify:
     load_dotenv()
 
     project_root = Path(__file__).resolve().parents[3]
-    cache_path = project_root / ".spotipy_cache" / f".cache-{scope.replace(',', '_')}"
+    normalized_scope = normalize_spotify_scope(scope)
+    cache_path = project_root / ".spotipy_cache" / f".cache-{normalized_scope}"
+    if allow_browser_auth is None:
+        allow_browser_auth = _should_allow_browser_auth()
 
-    cache_handler = CacheFileHandler(cache_path=cache_path)
-    auth = SpotifyOAuth(scope=scope, cache_handler=cache_handler)
+    cache_handler = LockedCacheFileHandler(cache_path=cache_path)
+    if not allow_browser_auth:
+        _assert_cached_token_covers_scope(
+            cache_handler,
+            scope=normalized_scope,
+            cache_path=cache_path,
+        )
+
+    auth_cls = SpotifyOAuth if allow_browser_auth else NonInteractiveSpotifyOAuth
+    auth = auth_cls(
+        scope=normalized_scope,
+        cache_handler=cache_handler,
+        open_browser=allow_browser_auth,
+    )
     sp = Spotify(
         auth_manager=auth,
-        requests_timeout=10,
-        retries=2,
-        status_retries=2,
-        backoff_factor=0.5,
-        status_forcelist=(429, 500, 502, 503, 504),
+        requests_timeout=SPOTIFY_REQUEST_TIMEOUT_SECONDS,
+        retries=SPOTIFY_RETRIES,
+        status_retries=SPOTIFY_RETRIES,
+        backoff_factor=SPOTIFY_BACKOFF_FACTOR,
+        status_forcelist=SPOTIFY_RETRY_STATUSES,
     )
 
-    logger.info(f"Instantiated Spotipy client for scope {scope}")
+    logger.info(f"Instantiated Spotipy client for scope {normalized_scope}")
     return sp
+
+
+def normalize_spotify_scope(scope: str) -> str:
+    """Return a stable scope string for cache names and OAuth validation."""
+
+    return " ".join(scope.replace(",", " ").split())
+
+
+def _should_allow_browser_auth() -> bool:
+    if os.environ.get("CI"):
+        return False
+    return sys.stdin.isatty()
+
+
+def _assert_cached_token_covers_scope(
+    cache_handler: LockedCacheFileHandler,
+    *,
+    scope: str,
+    cache_path: Path,
+) -> None:
+    token_info = cache_handler.get_cached_token()
+    if token_info is None:
+        raise SpotifyTokenCacheError(
+            f"No Spotify token cache found at {cache_path}. Run an interactive "
+            "Spotify login locally and upload the refreshed cache before running "
+            "non-interactive jobs."
+        )
+
+    token_scope = token_info.get("scope")
+    if isinstance(token_scope, str) and _scope_covers(token_scope, scope):
+        return
+
+    raise SpotifyTokenCacheError(
+        f"Spotify token cache {cache_path} does not cover required scope "
+        f"{scope!r}. Cached scope is {token_scope!r}."
+    )
+
+
+def _scope_covers(cached_scope: str, required_scope: str) -> bool:
+    cached = set(normalize_spotify_scope(cached_scope).split())
+    required = set(normalize_spotify_scope(required_scope).split())
+    return required.issubset(cached)
 
 
 def fetch_followed_labels_from_playlist(

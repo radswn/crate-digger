@@ -88,7 +88,7 @@ music-dirs = [
 
 Create the followed-label playlist in Spotify and add one representative track from each label you want to follow. The app reads each track's album label metadata and deduplicates the resulting label list.
 
-On the first run, the app initializes `.crate_digger_state/followed_labels.json` from the playlist without sending added/removed notifications or backfilling every existing label. Later playlist changes are compared against that state.
+On the first run, the app initializes `.crate_digger_state/fetch_pipeline/followed_labels.json` from the playlist without sending added/removed notifications or backfilling every existing label. Later playlist changes are compared against that state.
 
 ### 3. Spotify Authorization
 
@@ -248,7 +248,7 @@ Create a `.env` file in the project root (already loaded via `python-dotenv`):
 The repository is configured to run on Saturday mornings via GitHub Actions:
 
 1. OAuth token cached in AWS S3 between runs
-2. Followed-label and app-backfilled-label state cached in AWS S3 between runs
+2. Fetch pipeline state in `.crate_digger_state/fetch_pipeline/` cached in AWS S3 between runs
 3. New releases fetched every Saturday at 02:15 UTC
 4. Newly added labels backfilled into historical playlists
 5. Results posted to Telegram

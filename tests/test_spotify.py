@@ -67,6 +67,63 @@ def test_filter_past_week_releases_filters_correctly(monkeypatch):
     assert [r["uri"] for r in out] == ["a"]
 
 
+def test_normalize_spotify_scope_is_stable_for_cache_names():
+    assert (
+        m.normalize_spotify_scope("playlist-read-private, playlist-modify-private")
+        == "playlist-read-private playlist-modify-private"
+    )
+    assert (
+        m.normalize_spotify_scope(" playlist-read-private   user-library-read ")
+        == "playlist-read-private user-library-read"
+    )
+
+
+def test_noninteractive_spotify_auth_requires_cached_token(tmp_path):
+    cache_path = tmp_path / ".cache-playlist-read-private"
+    cache_handler = m.LockedCacheFileHandler(cache_path)
+
+    try:
+        m._assert_cached_token_covers_scope(
+            cache_handler,
+            scope="playlist-read-private",
+            cache_path=cache_path,
+        )
+    except m.SpotifyTokenCacheError as exc:
+        assert "No Spotify token cache found" in str(exc)
+    else:
+        raise AssertionError("Expected missing token cache to fail fast")
+
+
+def test_noninteractive_spotify_auth_validates_cached_scope(tmp_path):
+    cache_path = tmp_path / ".cache-playlist-read-private"
+    cache_handler = m.LockedCacheFileHandler(cache_path)
+    cache_handler.save_token_to_cache(
+        {
+            "access_token": "access",
+            "refresh_token": "refresh",
+            "expires_at": 9999999999,
+            "scope": "playlist-read-private",
+        }
+    )
+
+    m._assert_cached_token_covers_scope(
+        cache_handler,
+        scope="playlist-read-private",
+        cache_path=cache_path,
+    )
+
+    try:
+        m._assert_cached_token_covers_scope(
+            cache_handler,
+            scope="playlist-read-private playlist-modify-private",
+            cache_path=cache_path,
+        )
+    except m.SpotifyTokenCacheError as exc:
+        assert "does not cover required scope" in str(exc)
+    else:
+        raise AssertionError("Expected missing scope to fail fast")
+
+
 def test_remove_extended_versions_prefers_original_when_present():
     tracks = [
         _mk_track("Track", ["Artist"], "uri:1"),

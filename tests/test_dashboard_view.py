@@ -1,5 +1,8 @@
 import sqlite3
+import subprocess
+import time
 from pathlib import Path
+from threading import Event, Timer
 
 from fastapi.testclient import TestClient
 
@@ -275,8 +278,31 @@ def test_linked_spotify_action_keeps_manual_find_available():
 
     assert "https://open.spotify.com/track/linked" in action
     assert ">Linked</a>" in action
+    assert 'action="/spotify-link/refresh-art"' in action
+    assert ">Art</button>" in action
     assert ">Find</a>" in action
     assert 'action="/spotify-link/quick-link"' not in action
+
+
+def test_linked_spotify_action_hides_art_refresh_when_cover_exists():
+    track = seedless_track("/music/linked.mp3", spotify_uri="spotify:track:linked")
+    track = LocalTrack(
+        path=track.path,
+        title=track.title,
+        artist=track.artist,
+        album=track.album,
+        duration_seconds=track.duration_seconds,
+        bitrate=track.bitrate,
+        audio_format=track.audio_format,
+        artwork_mime="image/jpeg",
+        spotify_uri=track.spotify_uri,
+    )
+
+    action = _render_spotify_action(track, return_to="/?spotify=linked")
+
+    assert ">Linked</a>" in action
+    assert 'action="/spotify-link/refresh-art"' not in action
+    assert ">Find</a>" in action
 
 
 def test_safe_return_to_allows_only_local_paths():
@@ -288,8 +314,11 @@ def test_safe_return_to_allows_only_local_paths():
 
 def test_art_refresh_url_preserves_current_view():
     assert (
-        _with_art_refresh("/?q=night&spotify=linked&page=2")
-        == "/?q=night&spotify=linked&page=2&art_refresh=1"
+        _with_art_refresh(
+            "/?q=night&spotify=linked&page=2",
+            path="/music/covered.mp3",
+        )
+        == "/?q=night&spotify=linked&page=2&art_refresh=1&art_path=%2Fmusic%2Fcovered.mp3"
     )
     assert _with_art_refresh("/") == "/?art_refresh=1"
 
@@ -312,6 +341,14 @@ def test_render_cover_cache_busts_with_index_timestamp():
 
     assert "path=%2Fmusic%2Fcovered.mp3" in rendered
     assert "v=2026-05-15T10%3A00%3A00%2B00%3A00" in rendered
+    assert 'data-cover-path="/music/covered.mp3"' in rendered
+
+
+def test_render_cover_placeholder_can_be_refreshed_after_artwork_update():
+    rendered = _render_cover(seedless_track("/music/no-cover.mp3"))
+
+    assert rendered.startswith('<span class="cover cover-placeholder"')
+    assert 'data-cover-path="/music/no-cover.mp3"' in rendered
 
 
 def test_spotify_link_posts_redirect_to_return_to(tmp_path):
@@ -351,7 +388,7 @@ music-dirs = []
     assert response.headers["location"] == "/?q=night&spotify=unlinked&page=2"
 
 
-def test_spotify_link_replaces_art_before_redirect(tmp_path, monkeypatch):
+def test_spotify_link_schedules_art_without_waiting(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -370,9 +407,13 @@ music-dirs = []
     )
     db_path = tmp_path / "collection.sqlite3"
     calls = []
+    art_started = Event()
+    unblock_art = Event()
 
     def fake_replace_track_artwork_from_url(db_path, *, path, image_url):
         calls.append((str(db_path), path, image_url))
+        art_started.set()
+        unblock_art.wait(timeout=5)
         return True
 
     monkeypatch.setattr(
@@ -381,6 +422,9 @@ music-dirs = []
     )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
+    release_art_thread = Timer(2, unblock_art.set)
+    release_art_thread.start()
+    started_at = time.monotonic()
     response = client.post(
         "/spotify-link/link",
         data={
@@ -391,16 +435,90 @@ music-dirs = []
         },
         follow_redirects=False,
     )
+    elapsed = time.monotonic() - started_at
+    unblock_art.set()
+    release_art_thread.cancel()
 
     assert response.status_code == 303
     assert response.headers["location"] == (
-        "/?q=night&spotify=unlinked&page=2&art_refresh=1"
+        "/?q=night&spotify=unlinked&page=2&art_refresh=1&art_path=%2Fmusic%2Funlinked.mp3"
     )
+    assert elapsed < 1
+    assert art_started.wait(timeout=1)
     assert calls == [
         (
             str(db_path),
             "/music/unlinked.mp3",
             "https://i.scdn.co/image/manual-cover",
+        )
+    ]
+
+
+def test_refresh_spotify_art_schedules_from_saved_uri(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "linked.wav",
+        title="Linked",
+        artist="Ada",
+        album="Album",
+        bitrate=1411200,
+        audio_format="WAV",
+        spotify_uri="spotify:track:linked",
+    )
+    calls = []
+
+    def fake_start_track_artwork_replacement_from_spotify_uri(
+        *,
+        config_path,
+        db_path,
+        path,
+        spotify_uri,
+    ):
+        calls.append((config_path, str(db_path), path, spotify_uri))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
+        fake_start_track_artwork_replacement_from_spotify_uri,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/spotify-link/refresh-art",
+        data={
+            "path": "/music/linked.wav",
+            "return_to": "/?spotify=linked&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/?spotify=linked&page=2&art_refresh=1&art_path=%2Fmusic%2Flinked.wav"
+    )
+    assert calls == [
+        (
+            str(config_path),
+            str(db_path),
+            "/music/linked.wav",
+            "spotify:track:linked",
         )
     ]
 
@@ -555,7 +673,7 @@ music-dirs = []
                 }
             }
 
-    def fake_get_spotify_client(_scopes):
+    def fake_get_spotify_client(_scopes, **_kwargs):
         return Client()
 
     monkeypatch.setattr(
@@ -564,29 +682,13 @@ music-dirs = []
     )
     artwork_calls = []
 
-    def fake_download_spotify_artwork(url):
-        artwork_calls.append(("download", url))
-        return ("image/jpeg", b"cover")
-
-    def fake_overwrite_embedded_artwork(path, *, mime, data):
-        artwork_calls.append(("overwrite", str(path), mime, data))
-        return True
-
-    def fake_refresh_track_metadata(db_path, *, path):
-        artwork_calls.append(("refresh", str(db_path), path))
+    def fake_start_track_artwork_replacement(db_path, *, path, image_url):
+        artwork_calls.append((str(db_path), path, image_url))
         return True
 
     monkeypatch.setattr(
-        "crate_digger.web.app._download_spotify_artwork",
-        fake_download_spotify_artwork,
-    )
-    monkeypatch.setattr(
-        "crate_digger.web.app.overwrite_embedded_artwork",
-        fake_overwrite_embedded_artwork,
-    )
-    monkeypatch.setattr(
-        "crate_digger.web.app.refresh_track_metadata",
-        fake_refresh_track_metadata,
+        "crate_digger.web.app._start_track_artwork_replacement",
+        fake_start_track_artwork_replacement,
     )
 
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
@@ -606,17 +708,68 @@ music-dirs = []
         ).fetchone()[0]
 
     assert response.status_code == 303
-    assert response.headers["location"] == "/?spotify=unlinked&page=2&art_refresh=1"
+    assert response.headers["location"] == (
+        "/?spotify=unlinked&page=2&art_refresh=1&art_path=%2Fmusic%2Funlinked.mp3"
+    )
     assert spotify_uri == "spotify:track:first"
     assert artwork_calls == [
-        ("download", "https://i.scdn.co/image/first-cover"),
-        ("overwrite", "/music/unlinked.mp3", "image/jpeg", b"cover"),
-        ("refresh", str(db_path), "/music/unlinked.mp3"),
+        (str(db_path), "/music/unlinked.mp3", "https://i.scdn.co/image/first-cover")
     ]
 
 
 def test_download_spotify_artwork_rejects_non_image_url():
     assert _download_spotify_artwork("file:///tmp/cover.jpg") is None
+
+
+def test_download_spotify_artwork_times_out(monkeypatch):
+    blocker = Event()
+
+    def stuck_download(_url):
+        blocker.wait(timeout=5)
+        return ("image/jpeg", b"cover")
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._download_spotify_artwork_unbounded",
+        stuck_download,
+    )
+    started_at = time.monotonic()
+
+    assert _download_spotify_artwork("https://i.scdn.co/image/stuck") is None
+    assert time.monotonic() - started_at < 1
+    blocker.set()
+
+
+def test_download_spotify_artwork_uses_curl_helper_when_available(monkeypatch):
+    def fake_which(name):
+        return f"/usr/bin/{name}" if name in {"bash", "curl"} else None
+
+    def fake_run(command, *, capture_output, check, text, timeout):
+        assert command[0] == "/usr/bin/bash"
+        assert command[1].endswith("download_artwork.sh")
+        assert command[2] == "https://i.scdn.co/image/cover"
+        Path(command[3]).write_bytes(b"\xff\xd8\xffcover")
+        assert capture_output is True
+        assert check is False
+        assert text is True
+        assert timeout > 0
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="image/jpeg\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr("crate_digger.web.app.shutil.which", fake_which)
+    monkeypatch.setattr("crate_digger.web.app.subprocess.run", fake_run)
+
+    assert _download_spotify_artwork("https://i.scdn.co/image/cover") == (
+        "image/jpeg",
+        b"\xff\xd8\xffcover",
+    )
 
 
 def test_search_spotify_candidates_formats_results():
@@ -657,6 +810,47 @@ def test_search_spotify_candidates_formats_results():
     assert candidates[0].artists == "Ada"
     assert candidates[0].album == "Night Work"
     assert candidates[0].image_url == "https://i.scdn.co/image/cover"
+
+
+def test_search_spotify_candidates_prefers_medium_sized_cover():
+    class Client:
+        def search(self, *, q, type, limit, offset):
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "uri": "spotify:track:1",
+                            "name": "Deep Burn",
+                            "artists": [],
+                            "album": {
+                                "images": [
+                                    {
+                                        "url": "https://i.scdn.co/image/large",
+                                        "width": 640,
+                                    },
+                                    {
+                                        "url": "https://i.scdn.co/image/medium",
+                                        "width": 300,
+                                    },
+                                    {
+                                        "url": "https://i.scdn.co/image/small",
+                                        "width": 64,
+                                    },
+                                ],
+                            },
+                        }
+                    ]
+                }
+            }
+
+    candidates = _search_spotify_candidates(
+        Client(),
+        "Ada - Deep Burn",
+        offset=0,
+        limit=5,
+    )
+
+    assert candidates[0].image_url == "https://i.scdn.co/image/medium"
 
 
 def seedless_track(path: str, *, spotify_uri: str | None = None) -> LocalTrack:

@@ -10,6 +10,7 @@ from crate_digger.utils.spotify import (
     fetch_playlist_track_queries,
     format_track_query,
     get_spotify_client,
+    normalize_spotify_scope,
 )
 
 
@@ -18,7 +19,9 @@ LIVE_TEST_TRACK_URI = "spotify:track:4cOdK2wGLETKBW3PvgPWqT"
 
 def _spotify_cache_exists(scope: str) -> bool:
     project_root = Path(__file__).resolve().parents[1]
-    cache_path = project_root / ".spotipy_cache" / f".cache-{scope.replace(',', '_')}"
+    cache_path = (
+        project_root / ".spotipy_cache" / f".cache-{normalize_spotify_scope(scope)}"
+    )
     return cache_path.exists()
 
 

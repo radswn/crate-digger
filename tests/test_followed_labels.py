@@ -1,6 +1,11 @@
 import json
 
 from crate_digger.utils.followed_labels import (
+    DEFAULT_BACKFILLED_LABELS_PATH,
+    DEFAULT_PIPELINE_STATE_DIR,
+    DEFAULT_STATE_PATH,
+    LEGACY_BACKFILLED_LABELS_PATH,
+    LEGACY_STATE_PATH,
     compute_followed_label_changes,
     load_cached_backfilled_labels,
     load_followed_labels_state,
@@ -48,3 +53,31 @@ def test_backfilled_label_state_round_trips(tmp_path):
 
     assert json.loads(state_path.read_text()) == {"labels": ["A", "B"]}
     assert load_cached_backfilled_labels(state_path) == ["A", "B"]
+
+
+def test_default_followed_label_state_lives_under_fetch_pipeline():
+    assert DEFAULT_PIPELINE_STATE_DIR == DEFAULT_STATE_PATH.parent
+    assert DEFAULT_PIPELINE_STATE_DIR == DEFAULT_BACKFILLED_LABELS_PATH.parent
+    assert DEFAULT_STATE_PATH.name == "followed_labels.json"
+    assert DEFAULT_BACKFILLED_LABELS_PATH.name == "backfilled_labels.json"
+
+
+def test_default_followed_label_loaders_fall_back_to_legacy_paths(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    LEGACY_STATE_PATH.parent.mkdir(parents=True)
+    LEGACY_STATE_PATH.write_text('{"labels": ["A", "B", "A"]}', encoding="utf-8")
+    LEGACY_BACKFILLED_LABELS_PATH.write_text(
+        '{"labels": ["Done", "Done"]}',
+        encoding="utf-8",
+    )
+
+    assert load_followed_labels_state() == ["A", "B"]
+    assert load_cached_backfilled_labels() == ["Done"]
+
+    save_followed_labels_state(["C"])
+    save_cached_backfilled_labels(["New"])
+
+    assert DEFAULT_STATE_PATH.exists()
+    assert DEFAULT_BACKFILLED_LABELS_PATH.exists()

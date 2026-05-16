@@ -1,11 +1,14 @@
-from contextlib import asynccontextmanager
+import shutil
+import subprocess
 from collections.abc import Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from queue import Empty, Queue
+from tempfile import TemporaryDirectory
 from threading import Thread
-from typing import Any, Literal, cast
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import Request as UrlRequest
 from urllib.request import urlopen
@@ -27,7 +30,11 @@ from crate_digger.collection.index import (
 from crate_digger.collection.models import LocalTrack
 from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
+from crate_digger.utils.logging import get_logger
 from crate_digger.utils.spotify import get_spotify_client
+
+logger = get_logger(__name__)
+T = TypeVar("T")
 
 SortKey = Literal[
     "title",
@@ -48,6 +55,8 @@ SpotifyFilter = Literal["all", "unlinked", "linked", "skipped"]
 DEFAULT_PAGE_SIZE = 10
 SPOTIFY_LINK_LIMIT = 5
 SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS = 12
+SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS = 20
+SPOTIFY_ARTWORK_CURL_PHASE_TIMEOUT_SECONDS = 5
 MAX_ARTWORK_DOWNLOAD_BYTES = 8 * 1024 * 1024
 SORT_LABELS: dict[SortKey, str] = {
     "title": "Title",
@@ -233,14 +242,13 @@ def create_app(
         spotify_uri = form["spotify_uri"]
         set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
         return_to = _safe_return_to(form.get("return_to"))
-        art_replaced = await run_in_threadpool(
-            _replace_track_artwork_from_url,
+        art_started = _start_track_artwork_replacement(
             db_path,
             path=path,
             image_url=form.get("image_url"),
         )
-        if art_replaced:
-            return_to = _with_art_refresh(return_to)
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
         return RedirectResponse(return_to, status_code=303)
 
     @app.post("/spotify-link/quick-link")
@@ -270,14 +278,13 @@ def create_app(
             return RedirectResponse(fallback, status_code=303)
 
         set_track_spotify_uri(db_path, path=path, spotify_uri=candidates[0].uri)
-        art_replaced = await run_in_threadpool(
-            _replace_track_artwork_from_url,
+        art_started = _start_track_artwork_replacement(
             db_path,
             path=path,
             image_url=candidates[0].image_url,
         )
-        if art_replaced:
-            return_to = _with_art_refresh(return_to)
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
         return RedirectResponse(return_to, status_code=303)
 
     @app.post("/spotify-link/skip")
@@ -286,6 +293,25 @@ def create_app(
         path = form["path"]
         skip_track_spotify_link(db_path, path=path)
         return RedirectResponse(_safe_return_to(form.get("return_to")), status_code=303)
+
+    @app.post("/spotify-link/refresh-art")
+    async def refresh_spotify_art(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        track = get_track_for_spotify_linking(db_path, path=path)
+        if track is None or not track.spotify_uri:
+            return RedirectResponse(return_to, status_code=303)
+
+        art_started = _start_track_artwork_replacement_from_spotify_uri(
+            config_path=config_path,
+            db_path=db_path,
+            path=path,
+            spotify_uri=track.spotify_uri,
+        )
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
+        return RedirectResponse(return_to, status_code=303)
 
     @app.get("/art")
     def artwork(track_path: str = Query(..., alias="path")) -> Response:
@@ -336,6 +362,110 @@ def _parse_urlencoded_form(body: bytes) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items() if values}
 
 
+def _start_track_artwork_replacement(
+    db_path: Path,
+    *,
+    path: str,
+    image_url: str | None,
+) -> bool:
+    if not image_url:
+        return False
+
+    Thread(
+        target=_replace_track_artwork_from_url_safely,
+        args=(db_path,),
+        kwargs={"path": path, "image_url": image_url},
+        name="spotify-artwork-replacement",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _replace_track_artwork_from_url_safely(
+    db_path: Path,
+    *,
+    path: str,
+    image_url: str,
+) -> None:
+    try:
+        replaced = _replace_track_artwork_from_url(
+            db_path,
+            path=path,
+            image_url=image_url,
+        )
+    except Exception:
+        logger.exception("Failed to replace artwork for %s", path)
+        return
+
+    if not replaced:
+        logger.warning("Artwork replacement did not update %s", path)
+
+
+def _start_track_artwork_replacement_from_spotify_uri(
+    *,
+    config_path: str,
+    db_path: Path,
+    path: str,
+    spotify_uri: str,
+) -> bool:
+    if not spotify_uri:
+        return False
+
+    Thread(
+        target=_replace_track_artwork_from_spotify_uri_safely,
+        kwargs={
+            "config_path": config_path,
+            "db_path": db_path,
+            "path": path,
+            "spotify_uri": spotify_uri,
+        },
+        name="spotify-artwork-uri-replacement",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _replace_track_artwork_from_spotify_uri_safely(
+    *,
+    config_path: str,
+    db_path: Path,
+    path: str,
+    spotify_uri: str,
+) -> None:
+    try:
+        image_url = _spotify_image_url_for_track_uri(config_path, spotify_uri)
+        replaced = _replace_track_artwork_from_url(
+            db_path,
+            path=path,
+            image_url=image_url,
+        )
+    except Exception:
+        logger.exception("Failed to replace artwork for %s from %s", path, spotify_uri)
+        return
+
+    if not replaced:
+        logger.warning(
+            "Artwork replacement did not update %s from %s", path, spotify_uri
+        )
+
+
+def _spotify_image_url_for_track_uri(config_path: str, spotify_uri: str) -> str | None:
+    spotify_config = get_settings(config_path)["spotify"]
+    sp = get_spotify_client(
+        " ".join(spotify_config["scopes"]),
+        allow_browser_auth=False,
+    )
+    track = _run_with_timeout(
+        lambda: sp.track(spotify_uri),
+        timeout_seconds=SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS,
+        thread_name="spotify-track-artwork-lookup",
+    )
+    album = track.get("album") if isinstance(track, dict) else None
+    if not isinstance(album, dict):
+        return None
+    return _spotify_album_image_url(album)
+
+
 def _replace_track_artwork_from_url(
     db_path: Path,
     *,
@@ -356,10 +486,77 @@ def _replace_track_artwork_from_url(
 
 
 def _download_spotify_artwork(url: str) -> tuple[str, bytes] | None:
+    try:
+        return _run_with_timeout(
+            lambda: _download_spotify_artwork_unbounded(url),
+            timeout_seconds=SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS,
+            thread_name="spotify-artwork-download",
+        )
+    except TimeoutError:
+        logger.warning("Spotify artwork download timed out for %s", url)
+        return None
+
+
+def _download_spotify_artwork_unbounded(url: str) -> tuple[str, bytes] | None:
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
 
+    if shutil.which("bash") is not None and shutil.which("curl") is not None:
+        return _download_spotify_artwork_with_curl(url)
+
+    return _download_spotify_artwork_with_urlopen(url)
+
+
+def _download_spotify_artwork_with_curl(url: str) -> tuple[str, bytes] | None:
+    bash_path = shutil.which("bash")
+    script_path = Path(__file__).with_name("download_artwork.sh")
+    if bash_path is None or not script_path.is_file():
+        return None
+
+    curl_timeout = max(1.0, SPOTIFY_ARTWORK_CURL_PHASE_TIMEOUT_SECONDS)
+    process_timeout = max(
+        curl_timeout + 1.0,
+        SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS - 1.0,
+    )
+    with TemporaryDirectory(prefix="crate-digger-artwork-") as temp_dir:
+        output_path = Path(temp_dir) / "cover"
+        try:
+            response = subprocess.run(
+                [
+                    bash_path,
+                    str(script_path),
+                    url,
+                    str(output_path),
+                    f"{curl_timeout:g}",
+                    str(MAX_ARTWORK_DOWNLOAD_BYTES),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=process_timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+        if response.returncode != 0:
+            logger.warning(
+                "Spotify artwork curl helper failed for %s: %s",
+                url,
+                response.stderr.strip()[:180],
+            )
+            return None
+
+        try:
+            data = output_path.read_bytes()
+        except OSError:
+            return None
+
+    mime = response.stdout.strip().splitlines()[-1] if response.stdout.strip() else ""
+    return _validated_downloaded_artwork(mime, data)
+
+
+def _download_spotify_artwork_with_urlopen(url: str) -> tuple[str, bytes] | None:
     request = UrlRequest(url, headers={"User-Agent": "crate-digger/1.0"})
     try:
         with urlopen(request, timeout=10) as response:
@@ -368,6 +565,13 @@ def _download_spotify_artwork(url: str) -> tuple[str, bytes] | None:
     except OSError:
         return None
 
+    return _validated_downloaded_artwork(mime, data)
+
+
+def _validated_downloaded_artwork(
+    mime: str,
+    data: bytes,
+) -> tuple[str, bytes] | None:
     if len(data) > MAX_ARTWORK_DOWNLOAD_BYTES:
         return None
     inferred_mime = _infer_image_mime(data)
@@ -400,10 +604,12 @@ def _safe_return_to(value: str | None) -> str:
     return value
 
 
-def _with_art_refresh(return_to: str) -> str:
+def _with_art_refresh(return_to: str, *, path: str | None = None) -> str:
     parsed = urlsplit(return_to)
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
     query["art_refresh"] = "1"
+    if path:
+        query["art_path"] = path
     return urlunsplit(
         (
             parsed.scheme,
@@ -470,7 +676,10 @@ def _search_spotify_candidates_from_config(
     limit: int,
 ) -> list[SpotifyCandidate]:
     spotify_config = get_settings(config_path)["spotify"]
-    sp = get_spotify_client(" ".join(spotify_config["scopes"]))
+    sp = get_spotify_client(
+        " ".join(spotify_config["scopes"]),
+        allow_browser_auth=False,
+    )
     return _search_spotify_candidates(
         sp,
         query,
@@ -484,9 +693,20 @@ def _run_spotify_lookup_with_timeout(
     *,
     timeout_seconds: float,
 ) -> list[SpotifyCandidate]:
-    results: Queue[tuple[str, list[SpotifyCandidate] | BaseException]] = Queue(
-        maxsize=1
+    return _run_with_timeout(
+        callback,
+        timeout_seconds=timeout_seconds,
+        thread_name="spotify-link-lookup",
     )
+
+
+def _run_with_timeout(
+    callback: Callable[[], T],
+    *,
+    timeout_seconds: float,
+    thread_name: str,
+) -> T:
+    results: Queue[tuple[str, T | BaseException]] = Queue(maxsize=1)
 
     def run() -> None:
         try:
@@ -494,17 +714,17 @@ def _run_spotify_lookup_with_timeout(
         except BaseException as exc:
             results.put(("error", exc))
 
-    Thread(target=run, name="spotify-link-lookup", daemon=True).start()
+    Thread(target=run, name=thread_name, daemon=True).start()
 
     try:
         kind, value = results.get(timeout=timeout_seconds)
     except Empty as exc:
-        raise TimeoutError(f"Spotify lookup exceeded {timeout_seconds:g}s") from exc
+        raise TimeoutError(f"{thread_name} exceeded {timeout_seconds:g}s") from exc
 
     if kind == "error":
         assert isinstance(value, BaseException)
         raise value
-    return cast(list[SpotifyCandidate], value)
+    return cast(T, value)
 
 
 def _short_error(error: Exception) -> str:
@@ -567,11 +787,27 @@ def _spotify_album_image_url(album: dict[str, Any]) -> str | None:
     if not isinstance(images, list):
         return None
 
+    sized_images: list[tuple[int, str]] = []
+    fallback_url: str | None = None
     for image in images:
-        if isinstance(image, dict) and isinstance(image.get("url"), str):
-            return cast(str, image["url"])
+        if not isinstance(image, dict) or not isinstance(image.get("url"), str):
+            continue
 
-    return None
+        url = cast(str, image["url"])
+        if fallback_url is None:
+            fallback_url = url
+
+        width = image.get("width")
+        if isinstance(width, int):
+            sized_images.append((width, url))
+
+    if sized_images:
+        large_enough = [(width, url) for width, url in sized_images if width >= 300]
+        if large_enough:
+            return min(large_enough, key=lambda item: item[0])[1]
+        return max(sized_images, key=lambda item: item[0])[1]
+
+    return fallback_url
 
 
 def _build_collection_view(
@@ -1125,9 +1361,25 @@ def _render_index(
       }}
 
       function refreshCoverImages() {{
-        document.querySelectorAll("img.cover").forEach((image) => {{
-          const url = new URL(image.src);
+        const artPath = pageParams.get("art_path");
+        document.querySelectorAll(".cover[data-cover-path]").forEach((cover) => {{
+          if (artPath && cover.dataset.coverPath !== artPath) return;
+
+          const url = new URL("/art", window.location.origin);
+          url.searchParams.set("path", cover.dataset.coverPath);
           url.searchParams.set("refresh", Date.now().toString());
+          if (cover.tagName === "IMG") {{
+            cover.src = url.toString();
+            return;
+          }}
+
+          const image = new Image();
+          image.className = "cover";
+          image.alt = "";
+          image.dataset.coverPath = cover.dataset.coverPath;
+          image.onload = () => {{
+            cover.replaceWith(image);
+          }};
           image.src = url.toString();
         }});
       }}
@@ -1135,10 +1387,11 @@ def _render_index(
       const pageParams = new URLSearchParams(window.location.search);
       if (pageParams.get("art_refresh") === "1") {{
         pageParams.delete("art_refresh");
+        pageParams.delete("art_path");
         const cleanQuery = pageParams.toString();
         const cleanUrl = `${{window.location.pathname}}${{cleanQuery ? `?${{cleanQuery}}` : ""}}`;
         window.history.replaceState(null, "", cleanUrl);
-        [0, 750, 2000].forEach((delay) => {{
+        [0, 1000, 3000, 7000, 15000].forEach((delay) => {{
           window.setTimeout(refreshCoverImages, delay);
         }});
       }}
@@ -1690,8 +1943,10 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
             )
         else:
             linked = '<span class="spotify-linked">Linked</span>'
+        art_action = _refresh_spotify_art_action(track, return_to=return_to)
         return f"""<div class="spotify-actions">
   {linked}
+  {art_action}
   {_manual_spotify_link(track, return_to=return_to)}
 </div>"""
 
@@ -1727,6 +1982,16 @@ def _manual_spotify_link(track: LocalTrack, *, return_to: str) -> str:
     )
 
 
+def _refresh_spotify_art_action(track: LocalTrack, *, return_to: str) -> str:
+    if track.artwork_mime is not None:
+        return ""
+    return f"""<form method="post" action="/spotify-link/refresh-art">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    <button class="spotify-action" type="submit">Art</button>
+  </form>"""
+
+
 def _spotify_external_url_from_uri(uri: str) -> str | None:
     prefix = "spotify:track:"
     if not uri.startswith(prefix):
@@ -1735,13 +2000,14 @@ def _spotify_external_url_from_uri(uri: str) -> str | None:
 
 
 def _render_cover(track: LocalTrack) -> str:
+    data_path = f'data-cover-path="{escape(str(track.path))}"'
     if track.artwork_mime is None:
-        return '<span class="cover cover-placeholder"></span>'
+        return f'<span class="cover cover-placeholder" {data_path}></span>'
     params = {"path": str(track.path)}
     if track.indexed_at:
         params["v"] = track.indexed_at
     src = f"/art?{urlencode(params)}"
-    return f'<img class="cover" src="{escape(src)}" alt="">'
+    return f'<img class="cover" src="{escape(src)}" alt="" {data_path}>'
 
 
 def _short_path(path: Path) -> str:

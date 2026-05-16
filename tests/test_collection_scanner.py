@@ -101,6 +101,38 @@ def test_overwrite_embedded_artwork_updates_flac_cover(tmp_path, monkeypatch):
     assert saved["picture"].data == b"cover"
 
 
+def test_overwrite_embedded_artwork_updates_wav_cover(tmp_path, monkeypatch):
+    track = tmp_path / "track.wav"
+    track.write_bytes(b"not real audio")
+    saved = {}
+
+    class Tags:
+        def delall(self, key):
+            saved["deleted"] = key
+
+        def add(self, frame):
+            saved["frame"] = frame
+
+    class Audio:
+        tags = None
+
+        def add_tags(self):
+            saved["added_tags"] = True
+            self.tags = Tags()
+
+        def save(self):
+            saved["saved"] = True
+
+    monkeypatch.setattr("crate_digger.collection.scanner.WAVE", lambda path: Audio())
+
+    assert overwrite_embedded_artwork(track, mime="image/png", data=b"cover")
+    assert saved["added_tags"] is True
+    assert saved["deleted"] == "APIC"
+    assert saved["saved"] is True
+    assert saved["frame"].mime == "image/png"
+    assert saved["frame"].data == b"cover"
+
+
 def test_overwrite_embedded_artwork_ignores_unsupported_format(tmp_path):
     track = tmp_path / "track.wav"
     track.write_bytes(b"not real audio")

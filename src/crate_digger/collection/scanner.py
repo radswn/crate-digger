@@ -8,6 +8,7 @@ from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3NoHeaderError
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
+from mutagen.wave import WAVE
 
 from crate_digger.collection.models import LocalTrack
 
@@ -139,6 +140,8 @@ def overwrite_embedded_artwork(path: Path, *, mime: str, data: bytes) -> bool:
             _overwrite_mp3_artwork(path, mime=mime, data=data)
         elif suffix in {".m4a", ".mp4", ".alac"}:
             _overwrite_mp4_artwork(path, mime=mime, data=data)
+        elif suffix == ".wav":
+            _overwrite_wav_artwork(path, mime=mime, data=data)
         else:
             return False
     except (MutagenError, OSError):
@@ -186,6 +189,26 @@ def _overwrite_mp4_artwork(path: Path, *, mime: str, data: bytes) -> None:
     audio = MP4(path)
     image_format = MP4Cover.FORMAT_PNG if mime == "image/png" else MP4Cover.FORMAT_JPEG
     audio["covr"] = [MP4Cover(data, imageformat=image_format)]
+    audio.save()
+
+
+def _overwrite_wav_artwork(path: Path, *, mime: str, data: bytes) -> None:
+    audio = WAVE(path)
+    if audio.tags is None:
+        audio.add_tags()
+    if audio.tags is None:
+        return
+
+    audio.tags.delall("APIC")
+    audio.tags.add(
+        APIC(
+            encoding=3,
+            mime=mime,
+            type=3,
+            desc="Cover",
+            data=data,
+        )
+    )
     audio.save()
 
 
