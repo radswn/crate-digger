@@ -24,7 +24,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
 
       - name: Install dependencies
-        run: uv sync --frozen --group dev
+        run: uv sync --frozen --group dev --group dashboard
 
       - name: Install project (editable)
         run: uv pip install -e .
@@ -33,7 +33,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Type check (ty)
-        run: uvx ty check
+        run: uv run ty check
 
       - name: Tests
         run: uv run pytest --ignore=tests/test_auth.py
