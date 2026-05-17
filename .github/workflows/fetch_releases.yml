@@ -51,8 +51,6 @@ jobs:
       - name: Download followed-label state from S3
         run: |
           aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/fetch_pipeline .crate_digger_state/fetch_pipeline --recursive || true
-          aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/followed_labels.json .crate_digger_state/followed_labels.json || true
-          aws s3 cp s3://radswn-spotify-auth-cache/.crate_digger_state/backfilled_labels.json .crate_digger_state/backfilled_labels.json || true
 
       - name: Run script for fetching new releases
         env:
