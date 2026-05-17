@@ -151,6 +151,78 @@ def get_track_for_spotify_linking(
     return _track_from_row(row)
 
 
+def list_tracks_missing_spotify_artwork(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+) -> list[LocalTrack]:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_schema(conn)
+        rows = conn.execute(
+            """
+            select
+                path,
+                title,
+                artist,
+                album,
+                comment,
+                genre,
+                release_date,
+                file_created_at,
+                duration_seconds,
+                bitrate,
+                audio_format,
+                artwork_mime,
+                spotify_uri,
+                spotify_link_skipped_at,
+                indexed_at
+            from tracks
+            where spotify_uri is not null
+              and artwork_mime is null
+            order by lower(coalesce(nullif(artist, ''), '')),
+                     lower(coalesce(nullif(title, ''), stem)),
+                     lower(path)
+            """
+        ).fetchall()
+
+    return [_track_from_row(row) for row in rows]
+
+
+def list_tracks_pending_spotify_linking(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+) -> list[LocalTrack]:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_schema(conn)
+        rows = conn.execute(
+            """
+            select
+                path,
+                title,
+                artist,
+                album,
+                comment,
+                genre,
+                release_date,
+                file_created_at,
+                duration_seconds,
+                bitrate,
+                audio_format,
+                artwork_mime,
+                spotify_uri,
+                spotify_link_skipped_at,
+                indexed_at
+            from tracks
+            where spotify_uri is null
+              and spotify_link_skipped_at is null
+            order by lower(coalesce(nullif(artist, ''), '')),
+                     lower(coalesce(nullif(title, ''), stem)),
+                     lower(path)
+            """
+        ).fetchall()
+
+    return [_track_from_row(row) for row in rows]
+
+
 def set_track_spotify_uri(
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
     *,

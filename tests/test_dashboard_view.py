@@ -9,7 +9,10 @@ from fastapi.testclient import TestClient
 from crate_digger.collection.index import _ensure_schema
 from crate_digger.collection.models import LocalTrack
 from crate_digger.web.app import (
+    AutoArtworkRefreshState,
     SpotifyCandidate,
+    _auto_artwork_refresh_snapshot,
+    _auto_refresh_spotify_artwork,
     _build_collection_view,
     create_app,
     _download_spotify_artwork,
@@ -523,6 +526,266 @@ music-dirs = []
     ]
 
 
+def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
+    tmp_path, monkeypatch
+):
+    state = AutoArtworkRefreshState()
+    db_path = tmp_path / "collection.sqlite3"
+    track = seedless_track("/music/linked.mp3", spotify_uri="spotify:track:linked")
+    replacements = []
+
+    class Client:
+        def track(self, spotify_uri):
+            assert spotify_uri == "spotify:track:linked"
+            return {
+                "album": {
+                    "images": [
+                        {
+                            "url": "https://i.scdn.co/image/medium",
+                            "width": 300,
+                        }
+                    ]
+                }
+            }
+
+    def fake_replace_track_artwork_from_url(db_path, *, path, image_url):
+        replacements.append((str(db_path), path, image_url))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_missing_spotify_artwork",
+        lambda _db_path: [track],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_pending_spotify_linking",
+        lambda _db_path: [],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._get_spotify_linking_client",
+        lambda _config_path: Client(),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._replace_track_artwork_from_url",
+        fake_replace_track_artwork_from_url,
+    )
+
+    _auto_refresh_spotify_artwork(
+        config_path="config.toml",
+        db_path=db_path,
+        state=state,
+    )
+    snapshot = _auto_artwork_refresh_snapshot(state)
+
+    assert replacements == [
+        (
+            str(db_path),
+            "/music/linked.mp3",
+            "https://i.scdn.co/image/medium",
+        )
+    ]
+    assert snapshot["total"] == 1
+    assert snapshot["processed"] == 1
+    assert snapshot["artwork_updated"] == 1
+    assert snapshot["failed"] == 0
+
+
+def test_auto_refresh_spotify_artwork_links_first_result_and_updates_art(
+    tmp_path,
+    monkeypatch,
+):
+    state = AutoArtworkRefreshState()
+    db_path = tmp_path / "collection.sqlite3"
+    track = seedless_track("/music/unlinked.mp3")
+    linked = []
+    replacements = []
+
+    class Client:
+        def search(self, *, q, type, limit, offset):
+            assert q == "Ada - Night Track"
+            assert type == "track"
+            assert limit == 1
+            assert offset == 0
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "uri": "spotify:track:first",
+                            "name": "Night Track",
+                            "artists": [{"name": "Ada"}],
+                            "album": {
+                                "images": [
+                                    {
+                                        "url": "https://i.scdn.co/image/first",
+                                        "width": 300,
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_pending_spotify_linking",
+        lambda _db_path: [track],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_missing_spotify_artwork",
+        lambda _db_path: [],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._get_spotify_linking_client",
+        lambda _config_path: Client(),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.set_track_spotify_uri",
+        lambda db_path, *, path, spotify_uri: linked.append(
+            (str(db_path), path, spotify_uri)
+        ),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._replace_track_artwork_from_url",
+        lambda db_path, *, path, image_url: replacements.append(
+            (str(db_path), path, image_url)
+        )
+        or True,
+    )
+
+    _auto_refresh_spotify_artwork(
+        config_path="config.toml",
+        db_path=db_path,
+        state=state,
+    )
+    snapshot = _auto_artwork_refresh_snapshot(state)
+
+    assert linked == [(str(db_path), "/music/unlinked.mp3", "spotify:track:first")]
+    assert replacements == [
+        (str(db_path), "/music/unlinked.mp3", "https://i.scdn.co/image/first")
+    ]
+    assert snapshot["processed"] == 1
+    assert snapshot["linked"] == 1
+    assert snapshot["artwork_updated"] == 1
+    assert snapshot["no_results"] == 0
+    assert snapshot["failed"] == 0
+
+
+def test_auto_refresh_spotify_artwork_skips_tracks_without_results(
+    tmp_path,
+    monkeypatch,
+):
+    state = AutoArtworkRefreshState()
+    db_path = tmp_path / "collection.sqlite3"
+    track = seedless_track("/music/unlinked.mp3")
+    skipped = []
+
+    class Client:
+        def search(self, *, q, type, limit, offset):
+            return {"tracks": {"items": []}}
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_pending_spotify_linking",
+        lambda _db_path: [track],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_missing_spotify_artwork",
+        lambda _db_path: [],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._get_spotify_linking_client",
+        lambda _config_path: Client(),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.skip_track_spotify_link",
+        lambda db_path, *, path: skipped.append((str(db_path), path)),
+    )
+
+    _auto_refresh_spotify_artwork(
+        config_path="config.toml",
+        db_path=db_path,
+        state=state,
+    )
+    snapshot = _auto_artwork_refresh_snapshot(state)
+
+    assert skipped == [(str(db_path), "/music/unlinked.mp3")]
+    assert snapshot["processed"] == 1
+    assert snapshot["linked"] == 0
+    assert snapshot["artwork_updated"] == 0
+    assert snapshot["no_results"] == 1
+    assert snapshot["failed"] == 0
+
+
+def test_auto_refresh_spotify_artwork_times_out_stuck_track(
+    tmp_path,
+    monkeypatch,
+):
+    state = AutoArtworkRefreshState()
+    db_path = tmp_path / "collection.sqlite3"
+    track = seedless_track("/music/stuck.mp3")
+    blocker = Event()
+
+    class Client:
+        def search(self, *, q, type, limit, offset):
+            return {
+                "tracks": {
+                    "items": [
+                        {
+                            "uri": "spotify:track:stuck",
+                            "name": "Stuck",
+                            "artists": [],
+                            "album": {
+                                "images": [
+                                    {
+                                        "url": "https://i.scdn.co/image/stuck",
+                                        "width": 300,
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.SPOTIFY_SWEEP_TRACK_TIMEOUT_SECONDS",
+        0.01,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_pending_spotify_linking",
+        lambda _db_path: [track],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_missing_spotify_artwork",
+        lambda _db_path: [],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._get_spotify_linking_client",
+        lambda _config_path: Client(),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.set_track_spotify_uri",
+        lambda db_path, *, path, spotify_uri: None,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._replace_track_artwork_from_url",
+        lambda db_path, *, path, image_url: blocker.wait(timeout=5),
+    )
+
+    started_at = time.monotonic()
+    _auto_refresh_spotify_artwork(
+        config_path="config.toml",
+        db_path=db_path,
+        state=state,
+    )
+    snapshot = _auto_artwork_refresh_snapshot(state)
+    blocker.set()
+
+    assert time.monotonic() - started_at < 1
+    assert snapshot["processed"] == 1
+    assert snapshot["linked"] == 0
+    assert snapshot["artwork_updated"] == 0
+    assert snapshot["failed"] == 1
+
+
 def test_spotify_find_modal_reports_lookup_timeout(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
@@ -721,33 +984,11 @@ def test_download_spotify_artwork_rejects_non_image_url():
     assert _download_spotify_artwork("file:///tmp/cover.jpg") is None
 
 
-def test_download_spotify_artwork_times_out(monkeypatch):
-    blocker = Event()
-
-    def stuck_download(_url):
-        blocker.wait(timeout=5)
-        return ("image/jpeg", b"cover")
-
-    monkeypatch.setattr(
-        "crate_digger.web.app.SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS",
-        0.01,
-    )
-    monkeypatch.setattr(
-        "crate_digger.web.app._download_spotify_artwork_unbounded",
-        stuck_download,
-    )
-    started_at = time.monotonic()
-
-    assert _download_spotify_artwork("https://i.scdn.co/image/stuck") is None
-    assert time.monotonic() - started_at < 1
-    blocker.set()
-
-
 def test_download_spotify_artwork_uses_curl_helper_when_available(monkeypatch):
     def fake_which(name):
         return f"/usr/bin/{name}" if name in {"bash", "curl"} else None
 
-    def fake_run(command, *, capture_output, check, text, timeout):
+    def fake_run(command, *, capture_output, check, text):
         assert command[0] == "/usr/bin/bash"
         assert command[1].endswith("download_artwork.sh")
         assert command[2] == "https://i.scdn.co/image/cover"
@@ -755,7 +996,6 @@ def test_download_spotify_artwork_uses_curl_helper_when_available(monkeypatch):
         assert capture_output is True
         assert check is False
         assert text is True
-        assert timeout > 0
         return subprocess.CompletedProcess(
             command,
             0,

@@ -4,6 +4,8 @@ from crate_digger.collection.index import (
     _ensure_schema,
     get_track_artwork,
     get_track_for_spotify_linking,
+    list_tracks_missing_spotify_artwork,
+    list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
     set_track_spotify_uri,
@@ -168,6 +170,77 @@ def test_spotify_link_queue_saves_and_skips_tracks(tmp_path):
     assert linked is not None
     assert get_track_for_spotify_linking(db_path) is None
     assert linked.spotify_uri == "spotify:track:linked"
+
+
+def test_list_tracks_missing_spotify_artwork_returns_linked_blank_tracks(tmp_path):
+    db_path = tmp_path / "collection.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        for name, spotify_uri, artwork_mime in [
+            ("blank", "spotify:track:blank", None),
+            ("covered", "spotify:track:covered", "image/jpeg"),
+            ("unlinked", None, None),
+        ]:
+            conn.execute(
+                """
+                insert into tracks (
+                    path,
+                    stem,
+                    title,
+                    artist,
+                    audio_format,
+                    spotify_uri,
+                    artwork_mime,
+                    artwork_checked,
+                    size,
+                    mtime_ns,
+                    indexed_at
+                )
+                values (?, ?, ?, 'Ada', 'MP3', ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
+                """,
+                (f"/music/{name}.mp3", name, name.title(), spotify_uri, artwork_mime),
+            )
+
+    tracks = list_tracks_missing_spotify_artwork(db_path)
+
+    assert [str(track.path) for track in tracks] == ["/music/blank.mp3"]
+    assert tracks[0].spotify_uri == "spotify:track:blank"
+
+
+def test_list_tracks_pending_spotify_linking_returns_unlinked_unskipped_tracks(
+    tmp_path,
+):
+    db_path = tmp_path / "collection.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        for name, spotify_uri, skipped_at in [
+            ("pending", None, None),
+            ("linked", "spotify:track:linked", None),
+            ("skipped", None, "2026-01-01T00:00:00+00:00"),
+        ]:
+            conn.execute(
+                """
+                insert into tracks (
+                    path,
+                    stem,
+                    title,
+                    artist,
+                    audio_format,
+                    spotify_uri,
+                    spotify_link_skipped_at,
+                    artwork_checked,
+                    size,
+                    mtime_ns,
+                    indexed_at
+                )
+                values (?, ?, ?, 'Ada', 'MP3', ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
+                """,
+                (f"/music/{name}.mp3", name, name.title(), spotify_uri, skipped_at),
+            )
+
+    tracks = list_tracks_pending_spotify_linking(db_path)
+
+    assert [str(track.path) for track in tracks] == ["/music/pending.mp3"]
 
 
 def test_query_tracks_filters_by_spotify_status(tmp_path):

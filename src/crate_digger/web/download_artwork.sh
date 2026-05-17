@@ -10,6 +10,9 @@ tmp_path="${output_path}.tmp"
 headers_path="${output_path}.headers"
 chunk_path="${output_path}.chunk"
 chunk_size=8192
+url_host="${url#*://}"
+url_host="${url_host%%/*}"
+url_host="${url_host%%:*}"
 
 cleanup() {
   rm -f "$tmp_path" "$headers_path" "$chunk_path"
@@ -21,11 +24,24 @@ if command -v timeout >/dev/null 2>&1; then
   timeout_command=(timeout --kill-after=2s "${timeout_seconds}s")
 fi
 
+resolve_args=()
+if [[ "$url" == https://* ]] && command -v getent >/dev/null 2>&1; then
+  ipv4_address="$(
+    getent ahostsv4 "$url_host" | awk '$2 == "STREAM" { print $1; exit }'
+  )"
+  if [[ -n "$ipv4_address" ]]; then
+    resolve_args=(--resolve "${url_host}:443:${ipv4_address}")
+  fi
+fi
+
 curl_common=(
   --location
   --fail
   --silent
   --show-error
+  --noproxy
+  "*"
+  "${resolve_args[@]}"
   --connect-timeout 3
   --max-time "$timeout_seconds"
   --max-filesize "$max_bytes"

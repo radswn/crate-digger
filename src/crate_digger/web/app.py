@@ -2,16 +2,15 @@ import shutil
 import subprocess
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 from queue import Empty, Queue
 from tempfile import TemporaryDirectory
-from threading import Thread
+from threading import Lock, Thread
 from typing import Any, Literal, TypeVar, cast
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import Request as UrlRequest
-from urllib.request import urlopen
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -21,6 +20,8 @@ from crate_digger.collection.index import (
     DEFAULT_COLLECTION_DB_PATH,
     get_track_artwork,
     get_track_for_spotify_linking,
+    list_tracks_missing_spotify_artwork,
+    list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
     refresh_track_metadata,
@@ -56,7 +57,7 @@ DEFAULT_PAGE_SIZE = 10
 SPOTIFY_LINK_LIMIT = 5
 SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS = 12
 SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS = 20
-SPOTIFY_ARTWORK_CURL_PHASE_TIMEOUT_SECONDS = 5
+SPOTIFY_SWEEP_TRACK_TIMEOUT_SECONDS = 45
 MAX_ARTWORK_DOWNLOAD_BYTES = 8 * 1024 * 1024
 SORT_LABELS: dict[SortKey, str] = {
     "title": "Title",
@@ -115,6 +116,28 @@ class SpotifyCandidate:
     external_url: str | None
 
 
+@dataclass(frozen=True)
+class AutoArtworkTrackResult:
+    linked: bool = False
+    artwork_updated: bool = False
+    no_results: bool = False
+
+
+@dataclass
+class AutoArtworkRefreshState:
+    running: bool = False
+    total: int = 0
+    processed: int = 0
+    linked: int = 0
+    artwork_updated: int = 0
+    no_results: int = 0
+    failed: int = 0
+    current: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    lock: Lock = field(default_factory=Lock, repr=False)
+
+
 def create_app(
     config_path: str = "config.toml",
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
@@ -125,6 +148,12 @@ def create_app(
         app.state.collection_index_stats = refresh_collection_index(
             collection["music_dirs"],
             db_path=db_path,
+        )
+        app.state.auto_artwork_refresh_state = AutoArtworkRefreshState()
+        _start_auto_artwork_refresh(
+            config_path=config_path,
+            db_path=db_path,
+            state=app.state.auto_artwork_refresh_state,
         )
         yield
 
@@ -186,7 +215,19 @@ def create_app(
             page=page,
             page_size=DEFAULT_PAGE_SIZE,
         )
-        return HTMLResponse(_render_index(view, collection["music_dirs"]))
+        return HTMLResponse(
+            _render_index(
+                view,
+                collection["music_dirs"],
+                auto_artwork_status=_auto_artwork_refresh_snapshot(
+                    _get_auto_artwork_refresh_state(app)
+                ),
+            )
+        )
+
+    @app.get("/api/spotify-artwork-refresh")
+    def spotify_artwork_refresh_status() -> dict[str, object]:
+        return _auto_artwork_refresh_snapshot(_get_auto_artwork_refresh_state(app))
 
     @app.get("/spotify-link", response_class=HTMLResponse)
     async def spotify_link(
@@ -362,6 +403,235 @@ def _parse_urlencoded_form(body: bytes) -> dict[str, str]:
     return {key: values[0] for key, values in parsed.items() if values}
 
 
+def _get_auto_artwork_refresh_state(app: FastAPI) -> AutoArtworkRefreshState:
+    state = getattr(app.state, "auto_artwork_refresh_state", None)
+    if isinstance(state, AutoArtworkRefreshState):
+        return state
+
+    state = AutoArtworkRefreshState(finished_at=_now_iso())
+    app.state.auto_artwork_refresh_state = state
+    return state
+
+
+def _start_auto_artwork_refresh(
+    *,
+    config_path: str,
+    db_path: Path,
+    state: AutoArtworkRefreshState,
+) -> bool:
+    with state.lock:
+        if state.running:
+            return False
+        state.running = True
+        state.total = 0
+        state.processed = 0
+        state.linked = 0
+        state.artwork_updated = 0
+        state.no_results = 0
+        state.failed = 0
+        state.current = None
+        state.started_at = _now_iso()
+        state.finished_at = None
+
+    Thread(
+        target=_auto_refresh_spotify_artwork_safely,
+        kwargs={"config_path": config_path, "db_path": db_path, "state": state},
+        name="spotify-artwork-auto-refresh",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _auto_refresh_spotify_artwork_safely(
+    *,
+    config_path: str,
+    db_path: Path,
+    state: AutoArtworkRefreshState,
+) -> None:
+    try:
+        _auto_refresh_spotify_artwork(
+            config_path=config_path,
+            db_path=db_path,
+            state=state,
+        )
+    except Exception:
+        logger.exception("Automatic Spotify artwork refresh failed")
+    finally:
+        with state.lock:
+            state.running = False
+            state.current = None
+            state.finished_at = _now_iso()
+
+
+def _auto_refresh_spotify_artwork(
+    *,
+    config_path: str,
+    db_path: Path,
+    state: AutoArtworkRefreshState,
+) -> None:
+    tracks_to_link = list_tracks_pending_spotify_linking(db_path)
+    linked_tracks_without_art = list_tracks_missing_spotify_artwork(db_path)
+    with state.lock:
+        state.total = len(tracks_to_link) + len(linked_tracks_without_art)
+
+    if not tracks_to_link and not linked_tracks_without_art:
+        return
+
+    sp = _get_spotify_linking_client(config_path)
+
+    for track in tracks_to_link:
+        path = str(track.path)
+        with state.lock:
+            state.current = f"{track.display_artist} - {track.display_title}"
+
+        try:
+            result = _run_with_timeout(
+                lambda track=track: _auto_link_and_refresh_spotify_artwork(
+                    sp,
+                    db_path=db_path,
+                    track=track,
+                ),
+                timeout_seconds=SPOTIFY_SWEEP_TRACK_TIMEOUT_SECONDS,
+                thread_name="spotify-sweep-track",
+            )
+        except TimeoutError:
+            logger.warning("Timed out automatic Spotify link/art refresh for %s", path)
+            with state.lock:
+                state.processed += 1
+                state.failed += 1
+            continue
+        except Exception:
+            logger.exception("Failed automatic Spotify link/art refresh for %s", path)
+            with state.lock:
+                state.processed += 1
+                state.failed += 1
+            continue
+
+        with state.lock:
+            state.processed += 1
+            if result.linked:
+                state.linked += 1
+            if result.artwork_updated:
+                state.artwork_updated += 1
+            if result.no_results:
+                state.no_results += 1
+            if result.linked and not result.artwork_updated:
+                state.failed += 1
+
+    for track in linked_tracks_without_art:
+        spotify_uri = track.spotify_uri
+        if not spotify_uri:
+            continue
+
+        path = str(track.path)
+        with state.lock:
+            state.current = f"{track.display_artist} - {track.display_title}"
+
+        try:
+            result = _run_with_timeout(
+                lambda track=track, spotify_uri=spotify_uri: (
+                    _auto_refresh_linked_spotify_artwork(
+                        sp,
+                        db_path=db_path,
+                        track=track,
+                        spotify_uri=spotify_uri,
+                    )
+                ),
+                timeout_seconds=SPOTIFY_SWEEP_TRACK_TIMEOUT_SECONDS,
+                thread_name="spotify-sweep-track",
+            )
+        except TimeoutError:
+            logger.warning("Timed out automatic artwork refresh for %s", path)
+            with state.lock:
+                state.processed += 1
+                state.failed += 1
+            continue
+        except Exception:
+            logger.exception("Failed automatic artwork refresh for %s", path)
+            with state.lock:
+                state.processed += 1
+                state.failed += 1
+            continue
+
+        with state.lock:
+            state.processed += 1
+            if result.artwork_updated:
+                state.artwork_updated += 1
+            else:
+                state.failed += 1
+
+
+def _auto_link_and_refresh_spotify_artwork(
+    sp: Any,
+    *,
+    db_path: Path,
+    track: LocalTrack,
+) -> AutoArtworkTrackResult:
+    path = str(track.path)
+    candidates = _run_spotify_lookup_with_timeout(
+        lambda: _search_spotify_candidates(
+            sp,
+            _spotify_search_query(track),
+            offset=0,
+            limit=1,
+        ),
+        timeout_seconds=SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS,
+    )
+    if not candidates:
+        skip_track_spotify_link(db_path, path=path)
+        return AutoArtworkTrackResult(no_results=True)
+
+    candidate = candidates[0]
+    set_track_spotify_uri(db_path, path=path, spotify_uri=candidate.uri)
+    return AutoArtworkTrackResult(
+        linked=True,
+        artwork_updated=_replace_track_artwork_from_url(
+            db_path,
+            path=path,
+            image_url=candidate.image_url,
+        ),
+    )
+
+
+def _auto_refresh_linked_spotify_artwork(
+    sp: Any,
+    *,
+    db_path: Path,
+    track: LocalTrack,
+    spotify_uri: str,
+) -> AutoArtworkTrackResult:
+    image_url = _spotify_image_url_for_track_uri_with_client(sp, spotify_uri)
+    return AutoArtworkTrackResult(
+        artwork_updated=_replace_track_artwork_from_url(
+            db_path,
+            path=str(track.path),
+            image_url=image_url,
+        )
+    )
+
+
+def _auto_artwork_refresh_snapshot(
+    state: AutoArtworkRefreshState,
+) -> dict[str, object]:
+    with state.lock:
+        return {
+            "running": state.running,
+            "total": state.total,
+            "processed": state.processed,
+            "linked": state.linked,
+            "artwork_updated": state.artwork_updated,
+            "no_results": state.no_results,
+            "failed": state.failed,
+            "current": state.current,
+            "started_at": state.started_at,
+            "finished_at": state.finished_at,
+        }
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _start_track_artwork_replacement(
     db_path: Path,
     *,
@@ -450,11 +720,24 @@ def _replace_track_artwork_from_spotify_uri_safely(
 
 
 def _spotify_image_url_for_track_uri(config_path: str, spotify_uri: str) -> str | None:
+    return _spotify_image_url_for_track_uri_with_client(
+        _get_spotify_linking_client(config_path),
+        spotify_uri,
+    )
+
+
+def _get_spotify_linking_client(config_path: str) -> Any:
     spotify_config = get_settings(config_path)["spotify"]
-    sp = get_spotify_client(
+    return get_spotify_client(
         " ".join(spotify_config["scopes"]),
         allow_browser_auth=False,
     )
+
+
+def _spotify_image_url_for_track_uri_with_client(
+    sp: Any,
+    spotify_uri: str,
+) -> str | None:
     track = _run_with_timeout(
         lambda: sp.track(spotify_uri),
         timeout_seconds=SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS,
@@ -486,39 +769,15 @@ def _replace_track_artwork_from_url(
 
 
 def _download_spotify_artwork(url: str) -> tuple[str, bytes] | None:
-    try:
-        return _run_with_timeout(
-            lambda: _download_spotify_artwork_unbounded(url),
-            timeout_seconds=SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS,
-            thread_name="spotify-artwork-download",
-        )
-    except TimeoutError:
-        logger.warning("Spotify artwork download timed out for %s", url)
-        return None
-
-
-def _download_spotify_artwork_unbounded(url: str) -> tuple[str, bytes] | None:
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
 
-    if shutil.which("bash") is not None and shutil.which("curl") is not None:
-        return _download_spotify_artwork_with_curl(url)
-
-    return _download_spotify_artwork_with_urlopen(url)
-
-
-def _download_spotify_artwork_with_curl(url: str) -> tuple[str, bytes] | None:
     bash_path = shutil.which("bash")
     script_path = Path(__file__).with_name("download_artwork.sh")
-    if bash_path is None or not script_path.is_file():
+    if bash_path is None or shutil.which("curl") is None or not script_path.is_file():
         return None
 
-    curl_timeout = max(1.0, SPOTIFY_ARTWORK_CURL_PHASE_TIMEOUT_SECONDS)
-    process_timeout = max(
-        curl_timeout + 1.0,
-        SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS - 1.0,
-    )
     with TemporaryDirectory(prefix="crate-digger-artwork-") as temp_dir:
         output_path = Path(temp_dir) / "cover"
         try:
@@ -528,15 +787,14 @@ def _download_spotify_artwork_with_curl(url: str) -> tuple[str, bytes] | None:
                     str(script_path),
                     url,
                     str(output_path),
-                    f"{curl_timeout:g}",
+                    str(SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS),
                     str(MAX_ARTWORK_DOWNLOAD_BYTES),
                 ],
                 capture_output=True,
                 check=False,
                 text=True,
-                timeout=process_timeout,
             )
-        except (OSError, subprocess.TimeoutExpired):
+        except OSError:
             return None
 
         if response.returncode != 0:
@@ -553,18 +811,6 @@ def _download_spotify_artwork_with_curl(url: str) -> tuple[str, bytes] | None:
             return None
 
     mime = response.stdout.strip().splitlines()[-1] if response.stdout.strip() else ""
-    return _validated_downloaded_artwork(mime, data)
-
-
-def _download_spotify_artwork_with_urlopen(url: str) -> tuple[str, bytes] | None:
-    request = UrlRequest(url, headers={"User-Agent": "crate-digger/1.0"})
-    try:
-        with urlopen(request, timeout=10) as response:
-            data = response.read(MAX_ARTWORK_DOWNLOAD_BYTES + 1)
-            mime = response.headers.get_content_type()
-    except OSError:
-        return None
-
     return _validated_downloaded_artwork(mime, data)
 
 
@@ -906,6 +1152,8 @@ def _normalize_query(
 def _render_index(
     view: CollectionView,
     music_dirs: list[str],
+    *,
+    auto_artwork_status: dict[str, object] | None = None,
 ) -> str:
     rows = "\n".join(_render_track_row(track, view) for track in view.tracks)
     empty = ""
@@ -1256,6 +1504,18 @@ def _render_index(
       color: var(--muted);
       font-size: 15px;
     }}
+    .auto-artwork {{
+      margin: 14px 0;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .auto-artwork strong {{
+      color: var(--ink);
+    }}
     .pagination {{
       display: flex;
       align-items: center;
@@ -1314,6 +1574,7 @@ def _render_index(
   </header>
   <main class="wrap">
     {_render_controls(view)}
+    {_render_auto_artwork_status(auto_artwork_status)}
     <div class="viewbar">
       <span>Showing {showing_start}-{showing_end} of {view.filtered_count} matching tracks</span>
       {_render_pagination(view)}
@@ -1396,6 +1657,50 @@ def _render_index(
         }});
       }}
 
+      function renderAutoArtworkStatus(status) {{
+        const node = document.getElementById("auto-artwork-status");
+        if (!node) return;
+        if (!status.running && Number(status.total || 0) === 0) {{
+          node.hidden = true;
+          return;
+        }}
+
+        node.hidden = false;
+        const total = Number(status.total || 0);
+        const processed = Number(status.processed || 0);
+        const linked = Number(status.linked || 0);
+        const artworkUpdated = Number(status.artwork_updated || 0);
+        const noResults = Number(status.no_results || 0);
+        const failed = Number(status.failed || 0);
+        const escapeHtml = (value) => value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#x27;");
+        const current = status.current ? ` · Current: <strong>${{escapeHtml(status.current)}}</strong>` : "";
+        if (status.running) {{
+          node.innerHTML = `<strong>Spotify sweep running</strong> · ${{processed}}/${{total}} processed · ${{linked}} linked · ${{artworkUpdated}} covers · ${{noResults}} no results · ${{failed}} failed${{current}}`;
+          return;
+        }}
+        node.innerHTML = `<strong>Spotify sweep complete</strong> · ${{processed}}/${{total}} processed · ${{linked}} linked · ${{artworkUpdated}} covers · ${{noResults}} no results · ${{failed}} failed`;
+      }}
+
+      async function pollAutoArtworkStatus() {{
+        const node = document.getElementById("auto-artwork-status");
+        if (!node || node.hidden) return;
+        const response = await fetch("/api/spotify-artwork-refresh");
+        const status = await response.json();
+        renderAutoArtworkStatus(status);
+        if (status.running) {{
+          window.setTimeout(pollAutoArtworkStatus, 2500);
+        }} else if (Number(status.artwork_updated || 0) > 0) {{
+          window.setTimeout(refreshCoverImages, 250);
+        }}
+      }}
+
+      pollAutoArtworkStatus();
+
       document.addEventListener("click", (event) => {{
         const opener = event.target.closest("[data-spotify-modal-url]");
         if (opener) {{
@@ -1411,6 +1716,49 @@ def _render_index(
   </main>
 </body>
 </html>"""
+
+
+def _render_auto_artwork_status(status: dict[str, object] | None) -> str:
+    if not status:
+        return '<div id="auto-artwork-status" class="auto-artwork" hidden></div>'
+
+    running = bool(status.get("running"))
+    total = _status_int(status.get("total"))
+    processed = _status_int(status.get("processed"))
+    linked = _status_int(status.get("linked"))
+    artwork_updated = _status_int(status.get("artwork_updated"))
+    no_results = _status_int(status.get("no_results"))
+    failed = _status_int(status.get("failed"))
+    current = status.get("current")
+    hidden = "hidden" if not running and total == 0 else ""
+    if running:
+        current_html = (
+            f" · Current: <strong>{escape(str(current))}</strong>" if current else ""
+        )
+        text = (
+            "<strong>Spotify sweep running</strong>"
+            f" · {processed}/{total} processed"
+            f" · {linked} linked"
+            f" · {artwork_updated} covers"
+            f" · {no_results} no results"
+            f" · {failed} failed"
+            f"{current_html}"
+        )
+    else:
+        text = (
+            "<strong>Spotify sweep complete</strong>"
+            f" · {processed}/{total} processed"
+            f" · {linked} linked"
+            f" · {artwork_updated} covers"
+            f" · {no_results} no results"
+            f" · {failed} failed"
+        )
+
+    return f'<div id="auto-artwork-status" class="auto-artwork" {hidden}>{text}</div>'
+
+
+def _status_int(value: object) -> int:
+    return value if isinstance(value, int) else 0
 
 
 def _render_controls(view: CollectionView) -> str:
