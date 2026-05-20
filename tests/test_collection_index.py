@@ -8,6 +8,8 @@ from crate_digger.collection.index import (
     list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
+    refresh_track_metadata,
+    set_track_soundcloud_url,
     set_track_spotify_uri,
     skip_track_spotify_link,
 )
@@ -66,6 +68,38 @@ def test_refresh_collection_index_deletes_missing_files(tmp_path):
 
     assert stats.deleted_files == 1
     assert result.total_count == 0
+
+
+def test_refresh_track_metadata_deletes_missing_track(tmp_path):
+    db_path = tmp_path / "collection.sqlite3"
+    missing = tmp_path / "missing.mp3"
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            """
+            insert into tracks (
+                path,
+                stem,
+                title,
+                audio_format,
+                artwork_checked,
+                size,
+                mtime_ns,
+                indexed_at
+            )
+            values (?, 'missing', 'Missing', 'MP3', 1, 1, 1, '2026-01-01T00:00:00+00:00')
+            """,
+            (str(missing),),
+        )
+
+    assert not refresh_track_metadata(db_path, path=str(missing))
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "select path from tracks where path = ?",
+            (str(missing),),
+        ).fetchone()
+
+    assert row is None
 
 
 def test_refresh_collection_index_persists_extended_metadata(tmp_path, monkeypatch):
@@ -171,6 +205,16 @@ def test_spotify_link_queue_saves_and_skips_tracks(tmp_path):
     assert get_track_for_spotify_linking(db_path) is None
     assert linked.spotify_uri == "spotify:track:linked"
 
+    set_track_soundcloud_url(
+        db_path,
+        path=str(queued.path),
+        soundcloud_url="https://soundcloud.com/ada/linked",
+    )
+    soundcloud_linked = get_track_for_spotify_linking(db_path, path=str(queued.path))
+    assert soundcloud_linked is not None
+    assert soundcloud_linked.spotify_uri is None
+    assert soundcloud_linked.soundcloud_url == "https://soundcloud.com/ada/linked"
+
 
 def test_list_tracks_missing_spotify_artwork_returns_linked_blank_tracks(tmp_path):
     db_path = tmp_path / "collection.sqlite3"
@@ -213,10 +257,11 @@ def test_list_tracks_pending_spotify_linking_returns_unlinked_unskipped_tracks(
     db_path = tmp_path / "collection.sqlite3"
     with sqlite3.connect(db_path) as conn:
         _ensure_schema(conn)
-        for name, spotify_uri, skipped_at in [
-            ("pending", None, None),
-            ("linked", "spotify:track:linked", None),
-            ("skipped", None, "2026-01-01T00:00:00+00:00"),
+        for name, spotify_uri, soundcloud_url, skipped_at in [
+            ("pending", None, None, None),
+            ("linked", "spotify:track:linked", None, None),
+            ("soundcloud", None, "https://soundcloud.com/ada/track", None),
+            ("skipped", None, None, "2026-01-01T00:00:00+00:00"),
         ]:
             conn.execute(
                 """
@@ -227,15 +272,23 @@ def test_list_tracks_pending_spotify_linking_returns_unlinked_unskipped_tracks(
                     artist,
                     audio_format,
                     spotify_uri,
+                    soundcloud_url,
                     spotify_link_skipped_at,
                     artwork_checked,
                     size,
                     mtime_ns,
                     indexed_at
                 )
-                values (?, ?, ?, 'Ada', 'MP3', ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
+                values (?, ?, ?, 'Ada', 'MP3', ?, ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
                 """,
-                (f"/music/{name}.mp3", name, name.title(), spotify_uri, skipped_at),
+                (
+                    f"/music/{name}.mp3",
+                    name,
+                    name.title(),
+                    spotify_uri,
+                    soundcloud_url,
+                    skipped_at,
+                ),
             )
 
     tracks = list_tracks_pending_spotify_linking(db_path)
@@ -247,10 +300,11 @@ def test_query_tracks_filters_by_spotify_status(tmp_path):
     db_path = tmp_path / "collection.sqlite3"
     with sqlite3.connect(db_path) as conn:
         _ensure_schema(conn)
-        for name, spotify_uri, skipped_at in [
-            ("unlinked", None, None),
-            ("linked", "spotify:track:linked", None),
-            ("skipped", None, "2026-01-01T00:00:00+00:00"),
+        for name, spotify_uri, soundcloud_url, skipped_at in [
+            ("unlinked", None, None, None),
+            ("linked", "spotify:track:linked", None, None),
+            ("soundcloud", None, "https://soundcloud.com/ada/track", None),
+            ("skipped", None, None, "2026-01-01T00:00:00+00:00"),
         ]:
             conn.execute(
                 """
@@ -260,15 +314,23 @@ def test_query_tracks_filters_by_spotify_status(tmp_path):
                     title,
                     audio_format,
                     spotify_uri,
+                    soundcloud_url,
                     spotify_link_skipped_at,
                     artwork_checked,
                     size,
                     mtime_ns,
                     indexed_at
                 )
-                values (?, ?, ?, 'MP3', ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
+                values (?, ?, ?, 'MP3', ?, ?, ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
                 """,
-                (f"/music/{name}.mp3", name, name.title(), spotify_uri, skipped_at),
+                (
+                    f"/music/{name}.mp3",
+                    name,
+                    name.title(),
+                    spotify_uri,
+                    soundcloud_url,
+                    skipped_at,
+                ),
             )
 
     unlinked = query_tracks(
@@ -306,6 +368,9 @@ def test_query_tracks_filters_by_spotify_status(tmp_path):
     )
 
     assert [track.path.name for track in unlinked.tracks] == ["unlinked.mp3"]
-    assert [track.path.name for track in linked.tracks] == ["linked.mp3"]
+    assert [track.path.name for track in linked.tracks] == [
+        "linked.mp3",
+        "soundcloud.mp3",
+    ]
     assert [track.path.name for track in skipped.tracks] == ["skipped.mp3"]
     assert skipped.tracks[0].spotify_link_skipped_at == "2026-01-01T00:00:00+00:00"

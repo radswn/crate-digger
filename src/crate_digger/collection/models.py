@@ -20,6 +20,7 @@ class LocalTrack:
     artwork_mime: str | None = None
     artwork_data: bytes | None = None
     spotify_uri: str | None = None
+    soundcloud_url: str | None = None
     spotify_link_skipped_at: str | None = None
     indexed_at: str | None = None
 

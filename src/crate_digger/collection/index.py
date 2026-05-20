@@ -112,6 +112,7 @@ def get_track_for_spotify_linking(
                     audio_format,
                     artwork_mime,
                     spotify_uri,
+                    soundcloud_url,
                     spotify_link_skipped_at,
                     indexed_at
                 from tracks
@@ -136,10 +137,12 @@ def get_track_for_spotify_linking(
                     audio_format,
                     artwork_mime,
                     spotify_uri,
+                    soundcloud_url,
                     spotify_link_skipped_at,
                     indexed_at
                 from tracks
                 where spotify_uri is null
+                  and soundcloud_url is null
                   and spotify_link_skipped_at is null
                 order by lower(coalesce(nullif(artist, ''), '')), lower(coalesce(nullif(title, ''), stem)), lower(path)
                 limit 1
@@ -173,6 +176,7 @@ def list_tracks_missing_spotify_artwork(
                 audio_format,
                 artwork_mime,
                 spotify_uri,
+                soundcloud_url,
                 spotify_link_skipped_at,
                 indexed_at
             from tracks
@@ -209,10 +213,12 @@ def list_tracks_pending_spotify_linking(
                 audio_format,
                 artwork_mime,
                 spotify_uri,
+                soundcloud_url,
                 spotify_link_skipped_at,
                 indexed_at
             from tracks
             where spotify_uri is null
+              and soundcloud_url is null
               and spotify_link_skipped_at is null
             order by lower(coalesce(nullif(artist, ''), '')),
                      lower(coalesce(nullif(title, ''), stem)),
@@ -235,11 +241,43 @@ def set_track_spotify_uri(
             """
             update tracks
             set spotify_uri = ?,
+                soundcloud_url = null,
                 spotify_link_skipped_at = null
             where path = ?
             """,
             (spotify_uri, path),
         )
+
+
+def set_track_soundcloud_url(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+    soundcloud_url: str,
+) -> None:
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            """
+            update tracks
+            set soundcloud_url = ?,
+                spotify_uri = null,
+                spotify_link_skipped_at = null
+            where path = ?
+            """,
+            (soundcloud_url, path),
+        )
+
+
+def delete_track(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+    *,
+    path: str,
+) -> bool:
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        cursor = conn.execute("delete from tracks where path = ?", (path,))
+        return cursor.rowcount > 0
 
 
 def skip_track_spotify_link(
@@ -268,6 +306,7 @@ def refresh_track_metadata(
     try:
         stat = track_path.stat()
     except OSError:
+        delete_track(db_path, path=path)
         return False
 
     track = read_track_metadata(track_path)
@@ -367,6 +406,7 @@ def query_tracks(
                 audio_format,
                 artwork_mime,
                 spotify_uri,
+                soundcloud_url,
                 spotify_link_skipped_at,
                 indexed_at
             from tracks
@@ -419,6 +459,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             artwork_data blob,
             artwork_checked integer not null default 0,
             spotify_uri text,
+            soundcloud_url text,
             spotify_link_skipped_at text,
             size integer not null,
             mtime_ns integer not null,
@@ -434,6 +475,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "tracks", "artwork_data", "blob")
     _ensure_column(conn, "tracks", "artwork_checked", "integer not null default 0")
     _ensure_column(conn, "tracks", "spotify_uri", "text")
+    _ensure_column(conn, "tracks", "soundcloud_url", "text")
     _ensure_column(conn, "tracks", "spotify_link_skipped_at", "text")
     conn.execute("create index if not exists idx_tracks_format on tracks(audio_format)")
     conn.execute("create index if not exists idx_tracks_title on tracks(title)")
@@ -449,6 +491,9 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "create index if not exists idx_tracks_spotify_uri on tracks(spotify_uri)"
+    )
+    conn.execute(
+        "create index if not exists idx_tracks_soundcloud_url on tracks(soundcloud_url)"
     )
     conn.execute(
         "create index if not exists idx_tracks_spotify_skipped "
@@ -494,11 +539,12 @@ def _upsert_track(
             artwork_data,
             artwork_checked,
             spotify_uri,
+            soundcloud_url,
             size,
             mtime_ns,
             indexed_at
         )
-        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict(path) do update set
             stem = excluded.stem,
             title = excluded.title,
@@ -535,6 +581,7 @@ def _upsert_track(
             track.artwork_data,
             1,
             track.spotify_uri,
+            track.soundcloud_url,
             size,
             mtime_ns,
             datetime.now(timezone.utc).isoformat(),
@@ -604,11 +651,17 @@ def _build_where_clause(
         )
 
     if spotify == "unlinked":
-        parts.append("spotify_uri is null and spotify_link_skipped_at is null")
+        parts.append(
+            "spotify_uri is null and soundcloud_url is null "
+            "and spotify_link_skipped_at is null"
+        )
     elif spotify == "linked":
-        parts.append("spotify_uri is not null")
+        parts.append("(spotify_uri is not null or soundcloud_url is not null)")
     elif spotify == "skipped":
-        parts.append("spotify_uri is null and spotify_link_skipped_at is not null")
+        parts.append(
+            "spotify_uri is null and soundcloud_url is null "
+            "and spotify_link_skipped_at is not null"
+        )
 
     if not parts:
         return "", ()
@@ -641,6 +694,7 @@ def _track_from_row(row: sqlite3.Row) -> LocalTrack:
         audio_format=row["audio_format"],
         artwork_mime=row["artwork_mime"],
         spotify_uri=row["spotify_uri"],
+        soundcloud_url=row["soundcloud_url"],
         spotify_link_skipped_at=row["spotify_link_skipped_at"],
         indexed_at=row["indexed_at"],
     )

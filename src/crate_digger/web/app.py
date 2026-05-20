@@ -1,3 +1,4 @@
+import json
 import shutil
 import subprocess
 from collections.abc import Callable
@@ -11,6 +12,7 @@ from tempfile import TemporaryDirectory
 from threading import Lock, Thread
 from typing import Any, Literal, TypeVar, cast
 from urllib.parse import parse_qs, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -18,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from crate_digger.collection.index import (
     DEFAULT_COLLECTION_DB_PATH,
+    delete_track,
     get_track_artwork,
     get_track_for_spotify_linking,
     list_tracks_missing_spotify_artwork,
@@ -25,6 +28,7 @@ from crate_digger.collection.index import (
     query_tracks,
     refresh_collection_index,
     refresh_track_metadata,
+    set_track_soundcloud_url,
     set_track_spotify_uri,
     skip_track_spotify_link,
 )
@@ -250,6 +254,8 @@ def create_app(
         track = get_track_for_spotify_linking(db_path, path=path)
         if track is None:
             return HTMLResponse(_render_spotify_link_done(collection["music_dirs"]))
+        if not _track_file_exists(db_path, path=path):
+            return HTMLResponse(_render_spotify_link_done(collection["music_dirs"]))
 
         candidates, lookup_error = await _search_spotify_candidates_for_track(
             config_path=config_path,
@@ -287,8 +293,11 @@ def create_app(
         form = _parse_urlencoded_form(await request.body())
         path = form["path"]
         spotify_uri = form["spotify_uri"]
-        set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
         return_to = _safe_return_to(form.get("return_to"))
+        if not _track_file_exists(db_path, path=path):
+            return RedirectResponse(return_to, status_code=303)
+
+        set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
         art_started = _start_track_artwork_replacement(
             db_path,
             path=path,
@@ -306,7 +315,7 @@ def create_app(
         return_to = _safe_return_to(form.get("return_to"))
         path = form["path"]
         track = get_track_for_spotify_linking(db_path, path=path)
-        if track is None:
+        if track is None or not _track_file_exists(db_path, path=path):
             return RedirectResponse(return_to, status_code=303)
 
         candidates, _lookup_error = await _search_spotify_candidates_for_track(
@@ -346,7 +355,7 @@ def create_app(
             return RedirectResponse(return_to, status_code=303)
 
         track = get_track_for_spotify_linking(db_path, path=path)
-        if track is None:
+        if track is None or not _track_file_exists(db_path, path=path):
             return RedirectResponse(return_to, status_code=303)
 
         set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
@@ -360,10 +369,39 @@ def create_app(
             return_to = _with_art_refresh(return_to, path=path)
         return RedirectResponse(return_to, status_code=303)
 
+    @app.post("/soundcloud-link/manual")
+    async def manual_link_soundcloud_track(
+        request: Request,
+    ) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        soundcloud_url = _soundcloud_url_from_input(form.get("soundcloud_url", ""))
+        if soundcloud_url is None:
+            return RedirectResponse(return_to, status_code=303)
+
+        track = get_track_for_spotify_linking(db_path, path=path)
+        if track is None or not _track_file_exists(db_path, path=path):
+            return RedirectResponse(return_to, status_code=303)
+
+        set_track_soundcloud_url(db_path, path=path, soundcloud_url=soundcloud_url)
+        art_started = _start_track_artwork_replacement_from_soundcloud_url(
+            db_path=db_path,
+            path=path,
+            soundcloud_url=soundcloud_url,
+        )
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
+        return RedirectResponse(return_to, status_code=303)
+
     @app.post("/spotify-link/skip")
     async def skip_spotify_track(request: Request) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
         path = form["path"]
+        if not _track_file_exists(db_path, path=path):
+            return RedirectResponse(
+                _safe_return_to(form.get("return_to")), status_code=303
+            )
         skip_track_spotify_link(db_path, path=path)
         return RedirectResponse(_safe_return_to(form.get("return_to")), status_code=303)
 
@@ -373,7 +411,11 @@ def create_app(
         path = form["path"]
         return_to = _safe_return_to(form.get("return_to"))
         track = get_track_for_spotify_linking(db_path, path=path)
-        if track is None or not track.spotify_uri:
+        if (
+            track is None
+            or not track.spotify_uri
+            or not _track_file_exists(db_path, path=path)
+        ):
             return RedirectResponse(return_to, status_code=303)
 
         art_started = _start_track_artwork_replacement_from_spotify_uri(
@@ -388,6 +430,8 @@ def create_app(
 
     @app.get("/art")
     def artwork(track_path: str = Query(..., alias="path")) -> Response:
+        if not _track_file_exists(db_path, path=track_path):
+            return Response(status_code=404)
         result = get_track_artwork(db_path, path=track_path)
         if result is None:
             return Response(status_code=404)
@@ -425,6 +469,7 @@ def _track_to_json(track: LocalTrack) -> dict[str, object]:
         "audio_format": track.audio_format,
         "has_artwork": track.artwork_mime is not None,
         "spotify_uri": track.spotify_uri,
+        "soundcloud_url": track.soundcloud_url,
         "spotify_link_skipped_at": track.spotify_link_skipped_at,
         "indexed_at": track.indexed_at,
     }
@@ -433,6 +478,13 @@ def _track_to_json(track: LocalTrack) -> dict[str, object]:
 def _parse_urlencoded_form(body: bytes) -> dict[str, str]:
     parsed = parse_qs(body.decode("utf-8"), keep_blank_values=True)
     return {key: values[0] for key, values in parsed.items() if values}
+
+
+def _track_file_exists(db_path: Path, *, path: str) -> bool:
+    if Path(path).is_file():
+        return True
+    delete_track(db_path, path=path)
+    return False
 
 
 def _get_auto_artwork_refresh_state(app: FastAPI) -> AutoArtworkRefreshState:
@@ -600,6 +652,9 @@ def _auto_link_and_refresh_spotify_artwork(
     track: LocalTrack,
 ) -> AutoArtworkTrackResult:
     path = str(track.path)
+    if not _track_file_exists(db_path, path=path):
+        return AutoArtworkTrackResult()
+
     candidates = _run_spotify_lookup_with_timeout(
         lambda: _search_spotify_candidates(
             sp,
@@ -632,6 +687,9 @@ def _auto_refresh_linked_spotify_artwork(
     track: LocalTrack,
     spotify_uri: str,
 ) -> AutoArtworkTrackResult:
+    if not _track_file_exists(db_path, path=str(track.path)):
+        return AutoArtworkTrackResult()
+
     image_url = _spotify_image_url_for_track_uri_with_client(sp, spotify_uri)
     return AutoArtworkTrackResult(
         artwork_updated=_replace_track_artwork_from_url(
@@ -751,6 +809,80 @@ def _replace_track_artwork_from_spotify_uri_safely(
         )
 
 
+def _start_track_artwork_replacement_from_soundcloud_url(
+    *,
+    db_path: Path,
+    path: str,
+    soundcloud_url: str,
+) -> bool:
+    if not soundcloud_url:
+        return False
+
+    Thread(
+        target=_replace_track_artwork_from_soundcloud_url_safely,
+        kwargs={
+            "db_path": db_path,
+            "path": path,
+            "soundcloud_url": soundcloud_url,
+        },
+        name="soundcloud-artwork-url-replacement",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _replace_track_artwork_from_soundcloud_url_safely(
+    *,
+    db_path: Path,
+    path: str,
+    soundcloud_url: str,
+) -> None:
+    try:
+        image_url = _soundcloud_artwork_url_for_track_url(soundcloud_url)
+        replaced = _replace_track_artwork_from_url(
+            db_path,
+            path=path,
+            image_url=image_url,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to replace artwork for %s from %s", path, soundcloud_url
+        )
+        return
+
+    if not replaced:
+        logger.warning(
+            "Artwork replacement did not update %s from %s", path, soundcloud_url
+        )
+
+
+def _soundcloud_artwork_url_for_track_url(soundcloud_url: str) -> str | None:
+    endpoint = "https://soundcloud.com/oembed?" + urlencode(
+        {"format": "json", "url": soundcloud_url}
+    )
+    request = UrlRequest(
+        endpoint,
+        headers={"User-Agent": "crate-digger/1.0"},
+    )
+    with urlopen(request, timeout=SPOTIFY_LINK_LOOKUP_TIMEOUT_SECONDS) as response:
+        payload = response.read(512 * 1024)
+
+    try:
+        data = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict):
+        return None
+    thumbnail_url = data.get("thumbnail_url")
+    if not isinstance(thumbnail_url, str):
+        return None
+    parsed = urlsplit(thumbnail_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    return thumbnail_url
+
+
 def _spotify_image_url_for_track_uri(config_path: str, spotify_uri: str) -> str | None:
     return _spotify_image_url_for_track_uri_with_client(
         _get_spotify_linking_client(config_path),
@@ -787,6 +919,9 @@ def _replace_track_artwork_from_url(
     path: str,
     image_url: str | None,
 ) -> bool:
+    if not _track_file_exists(db_path, path=path):
+        return False
+
     if not image_url:
         return False
 
@@ -1342,7 +1477,7 @@ def _render_index(
       color: var(--muted);
     }}
     .spotify-cell {{
-      width: 285px;
+      width: 360px;
     }}
     .spotify-actions {{
       display: flex;
@@ -1361,7 +1496,7 @@ def _render_index(
       min-width: 0;
     }}
     .spotify-url-input {{
-      width: min(170px, 100%);
+      width: min(180px, 100%);
       min-width: 90px;
       height: 28px;
       padding: 0 8px;
@@ -1665,7 +1800,7 @@ def _render_index(
           <th style="width: 6%">{_sort_link(view, "format")}</th>
           <th style="width: 7%">{_sort_link(view, "bitrate")}</th>
           <th style="width: 6%">{_sort_link(view, "duration")}</th>
-          <th class="spotify-cell">Spotify</th>
+          <th class="spotify-cell">Source</th>
         </tr>
       </thead>
       <tbody>
@@ -2351,6 +2486,18 @@ def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
 
 
 def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
+    if track.soundcloud_url:
+        linked = (
+            f'<a class="spotify-linked" href="{escape(track.soundcloud_url)}" '
+            'target="_blank" rel="noreferrer">SoundCloud</a>'
+        )
+        return f"""<div class="spotify-actions">
+  {linked}
+  {_spotify_find_link(track, return_to=return_to)}
+  {_manual_spotify_url_form(track, return_to=return_to)}
+  {_manual_soundcloud_url_form(track, return_to=return_to)}
+</div>"""
+
     if track.spotify_uri:
         external_url = _spotify_external_url_from_uri(track.spotify_uri)
         if external_url:
@@ -2366,6 +2513,7 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
   {art_action}
   {_spotify_find_link(track, return_to=return_to)}
   {_manual_spotify_url_form(track, return_to=return_to)}
+  {_manual_soundcloud_url_form(track, return_to=return_to)}
 </div>"""
 
     if track.spotify_link_skipped_at:
@@ -2373,6 +2521,7 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
   <span class="spotify-linked">Skipped</span>
   {_spotify_find_link(track, return_to=return_to)}
   {_manual_spotify_url_form(track, return_to=return_to)}
+  {_manual_soundcloud_url_form(track, return_to=return_to)}
 </div>"""
 
     return f"""<div class="spotify-actions">
@@ -2383,6 +2532,7 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
   </form>
   {_spotify_find_link(track, return_to=return_to)}
   {_manual_spotify_url_form(track, return_to=return_to)}
+  {_manual_soundcloud_url_form(track, return_to=return_to)}
 </div>"""
 
 
@@ -2415,6 +2565,20 @@ def _manual_spotify_url_form(track: LocalTrack, *, return_to: str) -> str:
     <input type="hidden" name="return_to" value="{escape(return_to)}">
     {spotify_url_input}
     <button class="spotify-action" type="submit">Use</button>
+  </form>"""
+
+
+def _manual_soundcloud_url_form(track: LocalTrack, *, return_to: str) -> str:
+    soundcloud_url_input = (
+        '<input class="spotify-url-input" name="soundcloud_url" type="text" '
+        'inputmode="url" placeholder="SoundCloud URL" '
+        'aria-label="SoundCloud track URL">'
+    )
+    return f"""<form class="spotify-url-form" method="post" action="/soundcloud-link/manual">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    {soundcloud_url_input}
+    <button class="spotify-action" type="submit">SC</button>
   </form>"""
 
 
@@ -2457,6 +2621,22 @@ def _spotify_uri_from_input(value: str) -> str | None:
     if len(path_parts) >= 3 and path_parts[1] == "track":
         return _spotify_track_uri(path_parts[2])
     return None
+
+
+def _soundcloud_url_from_input(value: str) -> str | None:
+    value = value.strip()
+    if not value:
+        return None
+
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"}:
+        return None
+    hostname = parts.hostname.lower() if parts.hostname else ""
+    if hostname != "soundcloud.com" and not hostname.endswith(".soundcloud.com"):
+        return None
+    if not parts.path.strip("/"):
+        return None
+    return urlunsplit(("https", hostname, parts.path, "", ""))
 
 
 def _spotify_track_uri(track_id: str) -> str | None:

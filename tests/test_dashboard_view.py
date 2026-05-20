@@ -21,6 +21,8 @@ from crate_digger.web.app import (
     _render_spotify_action,
     _safe_return_to,
     _search_spotify_candidates,
+    _soundcloud_artwork_url_for_track_url,
+    _soundcloud_url_from_input,
     _spotify_uri_from_input,
     _with_art_refresh,
 )
@@ -37,6 +39,7 @@ def seed_track(
     audio_format: str,
     duration_seconds: float | None = None,
     spotify_uri: str | None = None,
+    soundcloud_url: str | None = None,
     spotify_link_skipped_at: str | None = None,
 ) -> None:
     path = Path("/music") / filename
@@ -54,6 +57,7 @@ def seed_track(
                 bitrate,
                 audio_format,
                 spotify_uri,
+                soundcloud_url,
                 spotify_link_skipped_at,
                 artwork_checked,
                 size,
@@ -61,7 +65,7 @@ def seed_track(
                 indexed_at
             )
             values (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1,
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1,
                 '2026-01-01T00:00:00+00:00'
             )
             """,
@@ -75,6 +79,7 @@ def seed_track(
                 bitrate,
                 audio_format,
                 spotify_uri,
+                soundcloud_url,
                 spotify_link_skipped_at,
             ),
         )
@@ -268,7 +273,9 @@ def test_spotify_link_actions_preserve_return_to():
     assert "return_to=%2F%3Fq%3Dnight%26spotify%3Dunlinked%26page%3D2" in action
     assert 'action="/spotify-link/quick-link"' in action
     assert 'action="/spotify-link/manual"' in action
+    assert 'action="/soundcloud-link/manual"' in action
     assert 'placeholder="Spotify URL"' in action
+    assert 'placeholder="SoundCloud URL"' in action
     assert ">Link</button>" in action
     assert ">Find</a>" in action
     assert ">Use</button>" in action
@@ -289,6 +296,22 @@ def test_linked_spotify_action_keeps_manual_find_available():
     assert ">Art</button>" in action
     assert ">Find</a>" in action
     assert 'action="/spotify-link/manual"' in action
+    assert 'action="/spotify-link/quick-link"' not in action
+
+
+def test_soundcloud_action_shows_linked_source_and_correction_controls():
+    track = seedless_track(
+        "/music/soundcloud.mp3",
+        soundcloud_url="https://soundcloud.com/ada/night-track",
+    )
+
+    action = _render_spotify_action(track, return_to="/?spotify=linked")
+
+    assert "https://soundcloud.com/ada/night-track" in action
+    assert ">SoundCloud</a>" in action
+    assert ">Find</a>" in action
+    assert 'action="/spotify-link/manual"' in action
+    assert 'action="/soundcloud-link/manual"' in action
     assert 'action="/spotify-link/quick-link"' not in action
 
 
@@ -341,6 +364,19 @@ def test_spotify_uri_from_input_accepts_track_urls_and_uris():
     assert _spotify_uri_from_input("https://example.com/track/abc123") is None
     assert _spotify_uri_from_input("https://open.spotify.com/album/abc123") is None
     assert _spotify_uri_from_input("spotify:album:abc123") is None
+
+
+def test_soundcloud_url_from_input_accepts_soundcloud_urls():
+    assert (
+        _soundcloud_url_from_input("https://soundcloud.com/ada/night-track?in=set")
+        == "https://soundcloud.com/ada/night-track"
+    )
+    assert (
+        _soundcloud_url_from_input("http://on.soundcloud.com/abc123")
+        == "https://on.soundcloud.com/abc123"
+    )
+    assert _soundcloud_url_from_input("https://example.com/ada/night-track") is None
+    assert _soundcloud_url_from_input("https://soundcloud.com") is None
 
 
 def test_dashboard_startup_does_not_start_spotify_sweep(tmp_path, monkeypatch):
@@ -542,6 +578,10 @@ music-dirs = []
         "crate_digger.web.app._replace_track_artwork_from_url",
         fake_replace_track_artwork_from_url,
     )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     release_art_thread = Timer(2, unblock_art.set)
@@ -620,6 +660,10 @@ music-dirs = []
         "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
         fake_start_track_artwork_replacement_from_spotify_uri,
     )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     response = client.post(
@@ -688,6 +732,10 @@ music-dirs = []
     monkeypatch.setattr(
         "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
         fake_start_track_artwork_replacement_from_spotify_uri,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
     )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
@@ -781,6 +829,207 @@ music-dirs = []
     assert spotify_uri is None
 
 
+def test_manual_spotify_link_prunes_deleted_file(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "deleted.mp3",
+        title="Deleted",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+    )
+
+    def fail_start_track_artwork_replacement_from_spotify_uri(**_kwargs):
+        raise AssertionError("deleted files must not schedule artwork")
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
+        fail_start_track_artwork_replacement_from_spotify_uri,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/spotify-link/manual",
+        data={
+            "path": "/music/deleted.mp3",
+            "spotify_url": "https://open.spotify.com/track/manual123",
+            "return_to": "/?spotify=unlinked",
+        },
+        follow_redirects=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "select path from tracks where path = ?",
+            ("/music/deleted.mp3",),
+        ).fetchone()
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?spotify=unlinked"
+    assert row is None
+
+
+def test_manual_soundcloud_link_sets_url_and_schedules_art(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "manual.mp3",
+        title="Manual",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+        spotify_uri="spotify:track:old",
+    )
+    calls = []
+
+    def fake_start_track_artwork_replacement_from_soundcloud_url(
+        *,
+        db_path,
+        path,
+        soundcloud_url,
+    ):
+        calls.append((str(db_path), path, soundcloud_url))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_soundcloud_url",
+        fake_start_track_artwork_replacement_from_soundcloud_url,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/soundcloud-link/manual",
+        data={
+            "path": "/music/manual.mp3",
+            "soundcloud_url": "https://soundcloud.com/ada/night-track?utm=share",
+            "return_to": "/?spotify=linked&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        spotify_uri, soundcloud_url, skipped_at = conn.execute(
+            """
+            select spotify_uri, soundcloud_url, spotify_link_skipped_at
+            from tracks
+            where path = ?
+            """,
+            ("/music/manual.mp3",),
+        ).fetchone()
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/?spotify=linked&page=2&art_refresh=1&art_path=%2Fmusic%2Fmanual.mp3"
+    )
+    assert spotify_uri is None
+    assert soundcloud_url == "https://soundcloud.com/ada/night-track"
+    assert skipped_at is None
+    assert calls == [
+        (
+            str(db_path),
+            "/music/manual.mp3",
+            "https://soundcloud.com/ada/night-track",
+        )
+    ]
+
+
+def test_manual_soundcloud_link_ignores_invalid_url(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "manual.mp3",
+        title="Manual",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+    )
+
+    def fail_start_track_artwork_replacement_from_soundcloud_url(**_kwargs):
+        raise AssertionError("invalid SoundCloud URLs must not schedule artwork")
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_soundcloud_url",
+        fail_start_track_artwork_replacement_from_soundcloud_url,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/soundcloud-link/manual",
+        data={
+            "path": "/music/manual.mp3",
+            "soundcloud_url": "https://example.com/ada/night-track",
+            "return_to": "/?spotify=unlinked",
+        },
+        follow_redirects=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        soundcloud_url = conn.execute(
+            "select soundcloud_url from tracks where path = ?",
+            ("/music/manual.mp3",),
+        ).fetchone()[0]
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?spotify=unlinked"
+    assert soundcloud_url is None
+
+
 def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
     tmp_path, monkeypatch
 ):
@@ -822,6 +1071,10 @@ def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
     monkeypatch.setattr(
         "crate_digger.web.app._replace_track_artwork_from_url",
         fake_replace_track_artwork_from_url,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
     )
 
     _auto_refresh_spotify_artwork(
@@ -905,6 +1158,10 @@ def test_auto_refresh_spotify_artwork_links_first_result_and_updates_art(
         )
         or True,
     )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
 
     _auto_refresh_spotify_artwork(
         config_path="config.toml",
@@ -952,6 +1209,10 @@ def test_auto_refresh_spotify_artwork_skips_tracks_without_results(
     monkeypatch.setattr(
         "crate_digger.web.app.skip_track_spotify_link",
         lambda db_path, *, path: skipped.append((str(db_path), path)),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
     )
 
     _auto_refresh_spotify_artwork(
@@ -1077,6 +1338,10 @@ music-dirs = []
         "crate_digger.web.app._search_spotify_candidates_from_config_with_timeout",
         fake_search_with_timeout,
     )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     response = client.get(
@@ -1093,7 +1358,7 @@ music-dirs = []
     assert "After Coma" in response.text
 
 
-def test_art_endpoint_disables_browser_cache(tmp_path):
+def test_art_endpoint_disables_browser_cache(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -1131,12 +1396,68 @@ music-dirs = []
             """,
             ("/music/covered.mp3", b"image-bytes"),
         )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     response = client.get("/art", params={"path": "/music/covered.mp3"})
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store, max-age=0"
+
+
+def test_art_endpoint_prunes_deleted_file(tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        conn.execute(
+            """
+            insert into tracks (
+                path,
+                stem,
+                title,
+                audio_format,
+                artwork_mime,
+                artwork_data,
+                artwork_checked,
+                size,
+                mtime_ns,
+                indexed_at
+            )
+            values (?, 'deleted', 'Deleted', 'MP3', 'image/jpeg', ?, 1, 1, 1, '2026-01-01T00:00:00+00:00')
+            """,
+            ("/music/deleted.mp3", b"image-bytes"),
+        )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.get("/art", params={"path": "/music/deleted.mp3"})
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "select path from tracks where path = ?",
+            ("/music/deleted.mp3",),
+        ).fetchone()
+
+    assert response.status_code == 404
+    assert row is None
 
 
 def test_quick_link_assigns_first_spotify_result(tmp_path, monkeypatch):
@@ -1208,6 +1529,10 @@ music-dirs = []
         "crate_digger.web.app._start_track_artwork_replacement",
         fake_start_track_artwork_replacement,
     )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
 
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
     response = client.post(
@@ -1265,6 +1590,41 @@ def test_download_spotify_artwork_uses_curl_helper_when_available(monkeypatch):
         "image/jpeg",
         b"\xff\xd8\xffcover",
     )
+
+
+def test_soundcloud_artwork_url_uses_oembed_thumbnail(monkeypatch):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self, _size):
+            return (
+                b'{"thumbnail_url": '
+                b'"https://i1.sndcdn.com/artworks-cover-t500x500.jpg"}'
+            )
+
+    calls = []
+
+    def fake_urlopen(request, *, timeout):
+        calls.append((request.full_url, timeout))
+        return Response()
+
+    monkeypatch.setattr("crate_digger.web.app.urlopen", fake_urlopen)
+
+    assert (
+        _soundcloud_artwork_url_for_track_url("https://soundcloud.com/ada/night-track")
+        == "https://i1.sndcdn.com/artworks-cover-t500x500.jpg"
+    )
+    assert calls == [
+        (
+            "https://soundcloud.com/oembed?format=json&url=https%3A%2F%2F"
+            "soundcloud.com%2Fada%2Fnight-track",
+            12,
+        )
+    ]
 
 
 def test_search_spotify_candidates_formats_results():
@@ -1352,6 +1712,7 @@ def seedless_track(
     path: str,
     *,
     spotify_uri: str | None = None,
+    soundcloud_url: str | None = None,
     spotify_link_skipped_at: str | None = None,
 ) -> LocalTrack:
     return LocalTrack(
@@ -1363,5 +1724,6 @@ def seedless_track(
         bitrate=None,
         audio_format="MP3",
         spotify_uri=spotify_uri,
+        soundcloud_url=soundcloud_url,
         spotify_link_skipped_at=spotify_link_skipped_at,
     )
