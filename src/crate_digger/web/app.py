@@ -150,11 +150,6 @@ def create_app(
             db_path=db_path,
         )
         app.state.auto_artwork_refresh_state = AutoArtworkRefreshState()
-        _start_auto_artwork_refresh(
-            config_path=config_path,
-            db_path=db_path,
-            state=app.state.auto_artwork_refresh_state,
-        )
         yield
 
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
@@ -228,6 +223,17 @@ def create_app(
     @app.get("/api/spotify-artwork-refresh")
     def spotify_artwork_refresh_status() -> dict[str, object]:
         return _auto_artwork_refresh_snapshot(_get_auto_artwork_refresh_state(app))
+
+    @app.post("/spotify-artwork-refresh")
+    async def start_spotify_artwork_refresh(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        return_to = _safe_return_to(form.get("return_to"))
+        _start_auto_artwork_refresh(
+            config_path=config_path,
+            db_path=db_path,
+            state=_get_auto_artwork_refresh_state(app),
+        )
+        return RedirectResponse(return_to, status_code=303)
 
     @app.get("/spotify-link", response_class=HTMLResponse)
     async def spotify_link(
@@ -323,6 +329,32 @@ def create_app(
             db_path,
             path=path,
             image_url=candidates[0].image_url,
+        )
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/spotify-link/manual")
+    async def manual_link_spotify_track(
+        request: Request,
+    ) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        spotify_uri = _spotify_uri_from_input(form.get("spotify_url", ""))
+        if spotify_uri is None:
+            return RedirectResponse(return_to, status_code=303)
+
+        track = get_track_for_spotify_linking(db_path, path=path)
+        if track is None:
+            return RedirectResponse(return_to, status_code=303)
+
+        set_track_spotify_uri(db_path, path=path, spotify_uri=spotify_uri)
+        art_started = _start_track_artwork_replacement_from_spotify_uri(
+            config_path=config_path,
+            db_path=db_path,
+            path=path,
+            spotify_uri=spotify_uri,
         )
         if art_started:
             return_to = _with_art_refresh(return_to, path=path)
@@ -1291,6 +1323,11 @@ def _render_index(
       color: var(--muted);
       font-size: 13px;
     }}
+    .viewbar-actions {{
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }}
     .viewbar form {{
       margin: 0;
     }}
@@ -1305,15 +1342,37 @@ def _render_index(
       color: var(--muted);
     }}
     .spotify-cell {{
-      width: 150px;
+      width: 285px;
     }}
     .spotify-actions {{
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
     }}
     .spotify-actions form {{
       margin: 0;
+    }}
+    .spotify-url-form {{
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex: 1 1 170px;
+      min-width: 0;
+    }}
+    .spotify-url-input {{
+      width: min(170px, 100%);
+      min-width: 90px;
+      height: 28px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      color: var(--ink);
+      font: inherit;
+      font-size: 12px;
+    }}
+    .spotify-url-form .spotify-action {{
+      padding-inline: 8px;
     }}
     .spotify-action {{
       height: 28px;
@@ -1398,15 +1457,15 @@ def _render_index(
     }}
     .candidate {{
       display: grid;
-      grid-template-columns: 54px 1fr auto;
+      grid-template-columns: 62px 1fr auto;
       gap: 12px;
       align-items: center;
       padding: 8px 0;
       border-bottom: 1px solid var(--line);
     }}
     .candidate-cover {{
-      width: 44px;
-      height: 44px;
+      width: 54px;
+      height: 54px;
       border: 1px solid var(--line);
       border-radius: 6px;
       object-fit: cover;
@@ -1435,12 +1494,12 @@ def _render_index(
       border-top: 1px solid var(--line);
     }}
     .cover-cell {{
-      width: 52px;
+      width: 72px;
     }}
     .cover {{
       display: block;
-      width: 36px;
-      height: 36px;
+      width: 56px;
+      height: 56px;
       border: 1px solid var(--line);
       border-radius: 6px;
       object-fit: cover;
@@ -1455,7 +1514,7 @@ def _render_index(
       font-weight: 800;
     }}
     th, td {{
-      padding: 6px 10px;
+      padding: 8px 10px;
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: middle;
@@ -1544,6 +1603,10 @@ def _render_index(
       .viewbar {{
         grid-template-columns: 1fr;
       }}
+      .viewbar-actions {{
+        justify-content: flex-start;
+        flex-wrap: wrap;
+      }}
       .pagination {{
         align-items: flex-start;
       }}
@@ -1578,24 +1641,30 @@ def _render_index(
     <div class="viewbar">
       <span>Showing {showing_start}-{showing_end} of {view.filtered_count} matching tracks</span>
       {_render_pagination(view)}
-      <form method="post" action="/reindex">
-        <button type="submit">Refresh index</button>
-      </form>
+      <div class="viewbar-actions">
+        <form method="post" action="/spotify-artwork-refresh">
+          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
+          <button type="submit">Run Spotify sweep</button>
+        </form>
+        <form method="post" action="/reindex">
+          <button type="submit">Refresh index</button>
+        </form>
+      </div>
     </div>
     {empty}
     <table class="table" {"hidden" if not view.tracks else ""}>
       <thead>
         <tr>
           <th class="cover-cell"></th>
-          <th style="width: 20%">{_sort_link(view, "title")}</th>
-          <th style="width: 12%">{_sort_link(view, "artist")}</th>
-          <th style="width: 13%">{_sort_link(view, "album")}</th>
-          <th style="width: 8%">{_sort_link(view, "genre")}</th>
-          <th style="width: 8%">{_sort_link(view, "release_date")}</th>
-          <th style="width: 8%">{_sort_link(view, "file_created_at")}</th>
-          <th style="width: 7%">{_sort_link(view, "format")}</th>
-          <th style="width: 8%">{_sort_link(view, "bitrate")}</th>
-          <th style="width: 7%">{_sort_link(view, "duration")}</th>
+          <th style="width: 18%">{_sort_link(view, "title")}</th>
+          <th style="width: 11%">{_sort_link(view, "artist")}</th>
+          <th style="width: 12%">{_sort_link(view, "album")}</th>
+          <th style="width: 7%">{_sort_link(view, "genre")}</th>
+          <th style="width: 7%">{_sort_link(view, "release_date")}</th>
+          <th style="width: 7%">{_sort_link(view, "file_created_at")}</th>
+          <th style="width: 6%">{_sort_link(view, "format")}</th>
+          <th style="width: 7%">{_sort_link(view, "bitrate")}</th>
+          <th style="width: 6%">{_sort_link(view, "duration")}</th>
           <th class="spotify-cell">Spotify</th>
         </tr>
       </thead>
@@ -2295,11 +2364,16 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
         return f"""<div class="spotify-actions">
   {linked}
   {art_action}
-  {_manual_spotify_link(track, return_to=return_to)}
+  {_spotify_find_link(track, return_to=return_to)}
+  {_manual_spotify_url_form(track, return_to=return_to)}
 </div>"""
 
     if track.spotify_link_skipped_at:
-        return '<span class="spotify-linked">Skipped</span>'
+        return f"""<div class="spotify-actions">
+  <span class="spotify-linked">Skipped</span>
+  {_spotify_find_link(track, return_to=return_to)}
+  {_manual_spotify_url_form(track, return_to=return_to)}
+</div>"""
 
     return f"""<div class="spotify-actions">
   <form method="post" action="/spotify-link/quick-link">
@@ -2307,11 +2381,12 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
     <input type="hidden" name="return_to" value="{escape(return_to)}">
     <button class="spotify-action" type="submit">Link</button>
   </form>
-  {_manual_spotify_link(track, return_to=return_to)}
+  {_spotify_find_link(track, return_to=return_to)}
+  {_manual_spotify_url_form(track, return_to=return_to)}
 </div>"""
 
 
-def _manual_spotify_link(track: LocalTrack, *, return_to: str) -> str:
+def _spotify_find_link(track: LocalTrack, *, return_to: str) -> str:
     href = _spotify_link_href(
         track=track,
         offset=0,
@@ -2330,6 +2405,19 @@ def _manual_spotify_link(track: LocalTrack, *, return_to: str) -> str:
     )
 
 
+def _manual_spotify_url_form(track: LocalTrack, *, return_to: str) -> str:
+    spotify_url_input = (
+        '<input class="spotify-url-input" name="spotify_url" type="text" '
+        'inputmode="url" placeholder="Spotify URL" aria-label="Spotify track URL">'
+    )
+    return f"""<form class="spotify-url-form" method="post" action="/spotify-link/manual">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    {spotify_url_input}
+    <button class="spotify-action" type="submit">Use</button>
+  </form>"""
+
+
 def _refresh_spotify_art_action(track: LocalTrack, *, return_to: str) -> str:
     if track.artwork_mime is not None:
         return ""
@@ -2345,6 +2433,36 @@ def _spotify_external_url_from_uri(uri: str) -> str | None:
     if not uri.startswith(prefix):
         return None
     return f"https://open.spotify.com/track/{uri.removeprefix(prefix)}"
+
+
+def _spotify_uri_from_input(value: str) -> str | None:
+    value = value.strip()
+    if not value:
+        return None
+
+    uri_prefix = "spotify:track:"
+    if value.startswith(uri_prefix):
+        track_id = value.removeprefix(uri_prefix).split("?", 1)[0].strip()
+        return _spotify_track_uri(track_id)
+
+    parts = urlsplit(value)
+    if parts.scheme not in {"http", "https"}:
+        return None
+    if parts.netloc.lower() != "open.spotify.com":
+        return None
+
+    path_parts = [part for part in parts.path.split("/") if part]
+    if len(path_parts) >= 2 and path_parts[0] == "track":
+        return _spotify_track_uri(path_parts[1])
+    if len(path_parts) >= 3 and path_parts[1] == "track":
+        return _spotify_track_uri(path_parts[2])
+    return None
+
+
+def _spotify_track_uri(track_id: str) -> str | None:
+    if not track_id or len(track_id) > 64 or not track_id.isalnum():
+        return None
+    return f"spotify:track:{track_id}"
 
 
 def _render_cover(track: LocalTrack) -> str:

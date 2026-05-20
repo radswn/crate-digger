@@ -21,6 +21,7 @@ from crate_digger.web.app import (
     _render_spotify_action,
     _safe_return_to,
     _search_spotify_candidates,
+    _spotify_uri_from_input,
     _with_art_refresh,
 )
 
@@ -266,8 +267,11 @@ def test_spotify_link_actions_preserve_return_to():
 
     assert "return_to=%2F%3Fq%3Dnight%26spotify%3Dunlinked%26page%3D2" in action
     assert 'action="/spotify-link/quick-link"' in action
+    assert 'action="/spotify-link/manual"' in action
+    assert 'placeholder="Spotify URL"' in action
     assert ">Link</button>" in action
     assert ">Find</a>" in action
+    assert ">Use</button>" in action
     assert (
         'name="return_to" value="/?q=night&amp;spotify=unlinked&amp;page=2"'
         in candidate
@@ -284,6 +288,7 @@ def test_linked_spotify_action_keeps_manual_find_available():
     assert 'action="/spotify-link/refresh-art"' in action
     assert ">Art</button>" in action
     assert ">Find</a>" in action
+    assert 'action="/spotify-link/manual"' in action
     assert 'action="/spotify-link/quick-link"' not in action
 
 
@@ -306,6 +311,120 @@ def test_linked_spotify_action_hides_art_refresh_when_cover_exists():
     assert ">Linked</a>" in action
     assert 'action="/spotify-link/refresh-art"' not in action
     assert ">Find</a>" in action
+    assert 'action="/spotify-link/manual"' in action
+
+
+def test_skipped_spotify_action_can_be_corrected_manually():
+    track = seedless_track(
+        "/music/skipped.mp3",
+        spotify_link_skipped_at="2026-01-01T00:00:00+00:00",
+    )
+
+    action = _render_spotify_action(track, return_to="/?spotify=skipped")
+
+    assert ">Skipped</span>" in action
+    assert ">Find</a>" in action
+    assert 'action="/spotify-link/manual"' in action
+    assert 'action="/spotify-link/quick-link"' not in action
+
+
+def test_spotify_uri_from_input_accepts_track_urls_and_uris():
+    assert _spotify_uri_from_input("spotify:track:abc123") == "spotify:track:abc123"
+    assert (
+        _spotify_uri_from_input("https://open.spotify.com/track/abc123?si=share")
+        == "spotify:track:abc123"
+    )
+    assert (
+        _spotify_uri_from_input("https://open.spotify.com/intl-de/track/abc123")
+        == "spotify:track:abc123"
+    )
+    assert _spotify_uri_from_input("https://example.com/track/abc123") is None
+    assert _spotify_uri_from_input("https://open.spotify.com/album/abc123") is None
+    assert _spotify_uri_from_input("spotify:album:abc123") is None
+
+
+def test_dashboard_startup_does_not_start_spotify_sweep(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_start_auto_artwork_refresh(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_auto_artwork_refresh",
+        fake_start_auto_artwork_refresh,
+    )
+
+    with TestClient(
+        create_app(
+            config_path=str(config_path), db_path=tmp_path / "collection.sqlite3"
+        )
+    ) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert calls == []
+
+
+def test_spotify_sweep_button_starts_refresh(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    calls = []
+
+    def fake_start_auto_artwork_refresh(*, config_path, db_path, state):
+        calls.append((config_path, str(db_path), state.running))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_auto_artwork_refresh",
+        fake_start_auto_artwork_refresh,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    page = client.get("/")
+    assert 'action="/spotify-artwork-refresh"' in page.text
+    assert ">Run Spotify sweep</button>" in page.text
+
+    response = client.post(
+        "/spotify-artwork-refresh",
+        data={"return_to": "/?spotify=unlinked&page=2"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?spotify=unlinked&page=2"
+    assert calls == [(str(config_path), str(db_path), False)]
 
 
 def test_safe_return_to_allows_only_local_paths():
@@ -524,6 +643,142 @@ music-dirs = []
             "spotify:track:linked",
         )
     ]
+
+
+def test_manual_spotify_link_sets_uri_and_schedules_art(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "manual.mp3",
+        title="Manual",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+        spotify_link_skipped_at="2026-01-01T00:00:00+00:00",
+    )
+    calls = []
+
+    def fake_start_track_artwork_replacement_from_spotify_uri(
+        *,
+        config_path,
+        db_path,
+        path,
+        spotify_uri,
+    ):
+        calls.append((config_path, str(db_path), path, spotify_uri))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
+        fake_start_track_artwork_replacement_from_spotify_uri,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/spotify-link/manual",
+        data={
+            "path": "/music/manual.mp3",
+            "spotify_url": "https://open.spotify.com/track/manual123?si=share",
+            "return_to": "/?spotify=skipped&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        spotify_uri, skipped_at = conn.execute(
+            "select spotify_uri, spotify_link_skipped_at from tracks where path = ?",
+            ("/music/manual.mp3",),
+        ).fetchone()
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/?spotify=skipped&page=2&art_refresh=1&art_path=%2Fmusic%2Fmanual.mp3"
+    )
+    assert spotify_uri == "spotify:track:manual123"
+    assert skipped_at is None
+    assert calls == [
+        (
+            str(config_path),
+            str(db_path),
+            "/music/manual.mp3",
+            "spotify:track:manual123",
+        )
+    ]
+
+
+def test_manual_spotify_link_ignores_invalid_url(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "manual.mp3",
+        title="Manual",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+    )
+
+    def fail_start_track_artwork_replacement_from_spotify_uri(**_kwargs):
+        raise AssertionError("invalid manual URLs must not schedule artwork")
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_spotify_uri",
+        fail_start_track_artwork_replacement_from_spotify_uri,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/spotify-link/manual",
+        data={
+            "path": "/music/manual.mp3",
+            "spotify_url": "https://open.spotify.com/album/not-a-track",
+            "return_to": "/?spotify=unlinked",
+        },
+        follow_redirects=False,
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        spotify_uri = conn.execute(
+            "select spotify_uri from tracks where path = ?",
+            ("/music/manual.mp3",),
+        ).fetchone()[0]
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?spotify=unlinked"
+    assert spotify_uri is None
 
 
 def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
@@ -1093,7 +1348,12 @@ def test_search_spotify_candidates_prefers_medium_sized_cover():
     assert candidates[0].image_url == "https://i.scdn.co/image/medium"
 
 
-def seedless_track(path: str, *, spotify_uri: str | None = None) -> LocalTrack:
+def seedless_track(
+    path: str,
+    *,
+    spotify_uri: str | None = None,
+    spotify_link_skipped_at: str | None = None,
+) -> LocalTrack:
     return LocalTrack(
         path=Path(path),
         title="Night Track",
@@ -1103,4 +1363,5 @@ def seedless_track(path: str, *, spotify_uri: str | None = None) -> LocalTrack:
         bitrate=None,
         audio_format="MP3",
         spotify_uri=spotify_uri,
+        spotify_link_skipped_at=spotify_link_skipped_at,
     )
