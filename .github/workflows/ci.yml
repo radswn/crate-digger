@@ -24,16 +24,13 @@ jobs:
         uses: astral-sh/setup-uv@v8.0.0
 
       - name: Install dependencies
-        run: uv sync --frozen --group dev --group dashboard
-
-      - name: Install project (editable)
-        run: uv pip install -e .
+        run: make install UV_SYNC_FLAGS="--frozen --group dev --group dashboard"
 
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: make lint
 
       - name: Type check (ty)
-        run: uv run ty check
+        run: make typecheck
 
       - name: Tests
-        run: uv run pytest --ignore=tests/test_auth.py
+        run: make test PYTEST_ARGS="--ignore=tests/test_auth.py"

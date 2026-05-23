@@ -2,20 +2,24 @@
 
 PYTHON ?= uv run python
 PYTEST ?= uv run pytest
+PYTEST_ARGS ?=
 RUFF ?= uv run ruff
+TY ?= uv run ty
+UV_SYNC_FLAGS ?=
 OUTPUT ?= to-download.txt
 ACAPELLA_OUTPUT ?= acapella.txt
 DASHBOARD_HOST ?= 127.0.0.1
 DASHBOARD_PORT ?= 8765
 
-.PHONY: help install test lint check dashboard fetch-new-releases backfill-label-history export-to-download-playlist wishlist-to-txt export-acapella-playlist acapella-to-txt
+.PHONY: help install test lint typecheck check dashboard fetch-new-releases backfill-label-history export-to-download-playlist wishlist-to-txt export-acapella-playlist acapella-to-txt
 
 help:
 	@printf "Available targets:\n"
 	@printf "  make install                         Sync dependencies and install project editable\n"
 	@printf "  make test                            Run the test suite\n"
 	@printf "  make lint                            Run Ruff checks\n"
-	@printf "  make check                           Run lint and tests\n"
+	@printf "  make typecheck                       Run ty checks\n"
+	@printf "  make check                           Run lint, type checks, and tests\n"
 	@printf "  make dashboard                       Run the local collection dashboard\n"
 	@printf "  make fetch-new-releases              Run the release fetcher\n"
 	@printf "  make backfill-label-history LABEL=... Backfill history for a label\n"
@@ -30,16 +34,19 @@ help:
 	@printf "  DASHBOARD_PORT=port                  Default: 8765\n"
 
 install:
-	uv sync
+	uv sync $(UV_SYNC_FLAGS)
 	uv pip install -e .
 
 test:
-	$(PYTEST)
+	$(PYTEST) $(PYTEST_ARGS)
 
 lint:
 	$(RUFF) check
 
-check: lint test
+typecheck:
+	$(TY) check
+
+check: lint typecheck test
 
 dashboard:
 	uv run --group dashboard python -m crate_digger.main.serve_dashboard --host "$(DASHBOARD_HOST)" --port "$(DASHBOARD_PORT)" --restart-existing
