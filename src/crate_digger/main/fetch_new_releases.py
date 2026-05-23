@@ -1,5 +1,6 @@
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.followed_labels import (
+    compute_labels_to_backfill,
     compute_followed_label_changes,
     load_cached_backfilled_labels,
     load_followed_labels_state,
@@ -30,11 +31,17 @@ backfilled_labels = []
 cached_backfilled_labels = load_cached_backfilled_labels()
 cached_backfilled_label_set = set(cached_backfilled_labels)
 
-for label in label_changes.added:
-    if label in cached_backfilled_label_set:
-        continue
+labels_to_backfill = compute_labels_to_backfill(
+    followed_labels,
+    label_changes.added,
+    cached_backfilled_labels,
+    initialized=label_changes.initialized,
+)
 
+for label in labels_to_backfill:
     if label_has_backfill_playlist(sp, label):
+        cached_backfilled_labels.append(label)
+        cached_backfilled_label_set.add(label)
         continue
 
     backfill_label_history(sp, label)

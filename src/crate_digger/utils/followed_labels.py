@@ -128,6 +128,30 @@ def compute_followed_label_changes(
     )
 
 
+def compute_labels_to_backfill(
+    current_labels: Sequence[str],
+    added_labels: Sequence[str],
+    cached_backfilled_labels: Sequence[str],
+    initialized: bool = False,
+) -> list[str]:
+    """Choose followed labels whose historical playlists should be backfilled."""
+
+    cached = set(unique_preserving_order(cached_backfilled_labels))
+    added = [
+        label for label in unique_preserving_order(added_labels) if label not in cached
+    ]
+
+    if initialized:
+        return added
+
+    missing_from_cache = [
+        label
+        for label in unique_preserving_order(current_labels)
+        if label not in cached
+    ]
+    return unique_preserving_order([*added, *missing_from_cache])
+
+
 def _with_legacy_fallback(state_path: Path, legacy_path: Path) -> Path:
     if state_path == DEFAULT_STATE_PATH and not state_path.exists():
         return legacy_path

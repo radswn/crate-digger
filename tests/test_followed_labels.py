@@ -7,6 +7,7 @@ from crate_digger.utils.followed_labels import (
     LEGACY_BACKFILLED_LABELS_PATH,
     LEGACY_STATE_PATH,
     compute_followed_label_changes,
+    compute_labels_to_backfill,
     load_cached_backfilled_labels,
     load_followed_labels_state,
     save_cached_backfilled_labels,
@@ -35,6 +36,37 @@ def test_compute_followed_label_changes_detects_added_and_removed():
     assert changes.added == ["C"]
     assert changes.removed == ["A"]
     assert changes.initialized is False
+
+
+def test_compute_labels_to_backfill_includes_followed_labels_missing_from_cache():
+    labels = compute_labels_to_backfill(
+        current_labels=["A", "B", "C"],
+        added_labels=[],
+        cached_backfilled_labels=["A"],
+    )
+
+    assert labels == ["B", "C"]
+
+
+def test_compute_labels_to_backfill_keeps_first_run_bootstrap_quiet():
+    labels = compute_labels_to_backfill(
+        current_labels=["A", "B"],
+        added_labels=[],
+        cached_backfilled_labels=[],
+        initialized=True,
+    )
+
+    assert labels == []
+
+
+def test_compute_labels_to_backfill_prefers_added_order_and_dedupes_cached():
+    labels = compute_labels_to_backfill(
+        current_labels=["A", "B", "C"],
+        added_labels=["C", "B", "B"],
+        cached_backfilled_labels=["A", "C"],
+    )
+
+    assert labels == ["B"]
 
 
 def test_followed_label_state_round_trips(tmp_path):
