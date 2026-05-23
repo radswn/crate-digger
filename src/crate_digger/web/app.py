@@ -24,6 +24,7 @@ from crate_digger.collection.index import (
     get_track_artwork,
     get_track_for_spotify_linking,
     list_tracks_missing_spotify_artwork,
+    list_tracks_for_volume_normalization,
     list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
@@ -33,6 +34,7 @@ from crate_digger.collection.index import (
     skip_track_spotify_link,
 )
 from crate_digger.collection.models import LocalTrack
+from crate_digger.collection.normalization import write_volume_normalization_tags
 from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.logging import get_logger
@@ -142,6 +144,20 @@ class AutoArtworkRefreshState:
     lock: Lock = field(default_factory=Lock, repr=False)
 
 
+@dataclass
+class VolumeNormalizationState:
+    running: bool = False
+    total: int = 0
+    processed: int = 0
+    tagged: int = 0
+    skipped: int = 0
+    failed: int = 0
+    current: str | None = None
+    started_at: str | None = None
+    finished_at: str | None = None
+    lock: Lock = field(default_factory=Lock, repr=False)
+
+
 def create_app(
     config_path: str = "config.toml",
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
@@ -154,6 +170,7 @@ def create_app(
             db_path=db_path,
         )
         app.state.auto_artwork_refresh_state = AutoArtworkRefreshState()
+        app.state.volume_normalization_state = VolumeNormalizationState()
         yield
 
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
@@ -221,12 +238,19 @@ def create_app(
                 auto_artwork_status=_auto_artwork_refresh_snapshot(
                     _get_auto_artwork_refresh_state(app)
                 ),
+                volume_normalization_status=_volume_normalization_snapshot(
+                    _get_volume_normalization_state(app)
+                ),
             )
         )
 
     @app.get("/api/spotify-artwork-refresh")
     def spotify_artwork_refresh_status() -> dict[str, object]:
         return _auto_artwork_refresh_snapshot(_get_auto_artwork_refresh_state(app))
+
+    @app.get("/api/volume-normalization")
+    def volume_normalization_status() -> dict[str, object]:
+        return _volume_normalization_snapshot(_get_volume_normalization_state(app))
 
     @app.post("/spotify-artwork-refresh")
     async def start_spotify_artwork_refresh(request: Request) -> RedirectResponse:
@@ -236,6 +260,28 @@ def create_app(
             config_path=config_path,
             db_path=db_path,
             state=_get_auto_artwork_refresh_state(app),
+        )
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/volume-normalization")
+    async def start_volume_normalization(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        return_to = _safe_return_to(form.get("return_to"))
+        _start_volume_normalization(
+            db_path=db_path,
+            state=_get_volume_normalization_state(app),
+        )
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/volume-normalization/track")
+    async def start_track_volume_normalization(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        _start_single_track_volume_normalization(
+            db_path=db_path,
+            path=path,
+            state=_get_volume_normalization_state(app),
         )
         return RedirectResponse(return_to, status_code=303)
 
@@ -394,6 +440,28 @@ def create_app(
             return_to = _with_art_refresh(return_to, path=path)
         return RedirectResponse(return_to, status_code=303)
 
+    @app.post("/soundcloud-link/refresh-art")
+    async def refresh_soundcloud_art(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        track = get_track_for_spotify_linking(db_path, path=path)
+        if (
+            track is None
+            or not track.soundcloud_url
+            or not _track_file_exists(db_path, path=path)
+        ):
+            return RedirectResponse(return_to, status_code=303)
+
+        art_started = _start_track_artwork_replacement_from_soundcloud_url(
+            db_path=db_path,
+            path=path,
+            soundcloud_url=track.soundcloud_url,
+        )
+        if art_started:
+            return_to = _with_art_refresh(return_to, path=path)
+        return RedirectResponse(return_to, status_code=303)
+
     @app.post("/spotify-link/skip")
     async def skip_spotify_track(request: Request) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
@@ -497,6 +565,16 @@ def _get_auto_artwork_refresh_state(app: FastAPI) -> AutoArtworkRefreshState:
     return state
 
 
+def _get_volume_normalization_state(app: FastAPI) -> VolumeNormalizationState:
+    state = getattr(app.state, "volume_normalization_state", None)
+    if isinstance(state, VolumeNormalizationState):
+        return state
+
+    state = VolumeNormalizationState(finished_at=_now_iso())
+    app.state.volume_normalization_state = state
+    return state
+
+
 def _start_auto_artwork_refresh(
     *,
     config_path: str,
@@ -524,6 +602,169 @@ def _start_auto_artwork_refresh(
         daemon=True,
     ).start()
     return True
+
+
+def _start_volume_normalization(
+    *,
+    db_path: Path,
+    state: VolumeNormalizationState,
+) -> bool:
+    with state.lock:
+        if state.running:
+            return False
+        state.running = True
+        state.total = 0
+        state.processed = 0
+        state.tagged = 0
+        state.skipped = 0
+        state.failed = 0
+        state.current = None
+        state.started_at = _now_iso()
+        state.finished_at = None
+
+    Thread(
+        target=_normalize_volume_metadata_safely,
+        kwargs={"db_path": db_path, "state": state},
+        name="volume-normalization",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _start_single_track_volume_normalization(
+    *,
+    db_path: Path,
+    path: str,
+    state: VolumeNormalizationState,
+) -> bool:
+    with state.lock:
+        if state.running:
+            return False
+        state.running = True
+        state.total = 1
+        state.processed = 0
+        state.tagged = 0
+        state.skipped = 0
+        state.failed = 0
+        state.current = Path(path).stem
+        state.started_at = _now_iso()
+        state.finished_at = None
+
+    Thread(
+        target=_normalize_single_track_volume_metadata_safely,
+        kwargs={"db_path": db_path, "path": path, "state": state},
+        name="volume-normalization-track",
+        daemon=True,
+    ).start()
+    return True
+
+
+def _normalize_volume_metadata_safely(
+    *,
+    db_path: Path,
+    state: VolumeNormalizationState,
+) -> None:
+    try:
+        _normalize_volume_metadata(db_path=db_path, state=state)
+    except Exception:
+        logger.exception("Volume normalization tag sweep failed")
+    finally:
+        with state.lock:
+            state.running = False
+            state.current = None
+            state.finished_at = _now_iso()
+
+
+def _normalize_single_track_volume_metadata_safely(
+    *,
+    db_path: Path,
+    path: str,
+    state: VolumeNormalizationState,
+) -> None:
+    try:
+        _normalize_single_track_volume_metadata(db_path=db_path, path=path, state=state)
+    except Exception:
+        logger.exception("Single-track volume normalization tag write failed")
+    finally:
+        with state.lock:
+            state.running = False
+            state.current = None
+            state.finished_at = _now_iso()
+
+
+def _normalize_volume_metadata(
+    *,
+    db_path: Path,
+    state: VolumeNormalizationState,
+) -> None:
+    tracks = list_tracks_for_volume_normalization(db_path)
+    with state.lock:
+        state.total = len(tracks)
+
+    for track in tracks:
+        path = str(track.path)
+        with state.lock:
+            state.current = f"{track.display_artist} - {track.display_title}"
+
+        if not _track_file_exists(db_path, path=path):
+            with state.lock:
+                state.processed += 1
+                state.skipped += 1
+            continue
+
+        try:
+            tagged = write_volume_normalization_tags(track.path)
+            refreshed = refresh_track_metadata(db_path, path=path) if tagged else False
+        except Exception:
+            logger.exception("Failed volume normalization tags for %s", path)
+            with state.lock:
+                state.processed += 1
+                state.failed += 1
+            continue
+
+        with state.lock:
+            state.processed += 1
+            if tagged and refreshed:
+                state.tagged += 1
+            elif tagged:
+                state.failed += 1
+            else:
+                state.skipped += 1
+
+
+def _normalize_single_track_volume_metadata(
+    *,
+    db_path: Path,
+    path: str,
+    state: VolumeNormalizationState,
+) -> None:
+    with state.lock:
+        state.total = 1
+
+    if not _track_file_exists(db_path, path=path):
+        with state.lock:
+            state.processed = 1
+            state.skipped = 1
+        return
+
+    try:
+        tagged = write_volume_normalization_tags(Path(path))
+        refreshed = refresh_track_metadata(db_path, path=path) if tagged else False
+    except Exception:
+        logger.exception("Failed volume normalization tags for %s", path)
+        with state.lock:
+            state.processed = 1
+            state.failed = 1
+        return
+
+    with state.lock:
+        state.processed = 1
+        if tagged and refreshed:
+            state.tagged = 1
+        elif tagged:
+            state.failed = 1
+        else:
+            state.skipped = 1
 
 
 def _auto_refresh_spotify_artwork_safely(
@@ -718,6 +959,23 @@ def _auto_artwork_refresh_snapshot(
         }
 
 
+def _volume_normalization_snapshot(
+    state: VolumeNormalizationState,
+) -> dict[str, object]:
+    with state.lock:
+        return {
+            "running": state.running,
+            "total": state.total,
+            "processed": state.processed,
+            "tagged": state.tagged,
+            "skipped": state.skipped,
+            "failed": state.failed,
+            "current": state.current,
+            "started_at": state.started_at,
+            "finished_at": state.finished_at,
+        }
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -843,6 +1101,7 @@ def _replace_track_artwork_from_soundcloud_url_safely(
             db_path,
             path=path,
             image_url=image_url,
+            normalize_for_rekordbox=True,
         )
     except Exception:
         logger.exception(
@@ -918,6 +1177,7 @@ def _replace_track_artwork_from_url(
     *,
     path: str,
     image_url: str | None,
+    normalize_for_rekordbox: bool = False,
 ) -> bool:
     if not _track_file_exists(db_path, path=path):
         return False
@@ -930,9 +1190,71 @@ def _replace_track_artwork_from_url(
         return False
 
     mime, data = artwork
+    if normalize_for_rekordbox:
+        mime, data = _normalize_artwork_for_rekordbox(mime=mime, data=data)
     if overwrite_embedded_artwork(Path(path), mime=mime, data=data):
         return refresh_track_metadata(db_path, path=path)
     return False
+
+
+def _normalize_artwork_for_rekordbox(
+    *,
+    mime: str,
+    data: bytes,
+) -> tuple[str, bytes]:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if ffmpeg_path is None:
+        return mime, data
+
+    input_suffix = ".png" if mime == "image/png" else ".jpg"
+    with TemporaryDirectory(prefix="crate-digger-artwork-normalize-") as temp_dir:
+        input_path = Path(temp_dir) / f"input{input_suffix}"
+        output_path = Path(temp_dir) / "cover.jpg"
+        try:
+            input_path.write_bytes(data)
+            result = subprocess.run(
+                [
+                    ffmpeg_path,
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-y",
+                    "-i",
+                    str(input_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    (
+                        "scale=1000:1000:force_original_aspect_ratio=decrease,"
+                        "pad=1000:1000:(ow-iw)/2:(oh-ih)/2:color=white,"
+                        "format=yuvj420p"
+                    ),
+                    "-pix_fmt",
+                    "yuvj420p",
+                    "-q:v",
+                    "2",
+                    str(output_path),
+                ],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=SPOTIFY_ARTWORK_DOWNLOAD_TIMEOUT_SECONDS,
+            )
+            if result.returncode != 0:
+                logger.warning(
+                    "Artwork JPEG normalization failed: %s",
+                    result.stderr.strip()[:180],
+                )
+                return mime, data
+            normalized = output_path.read_bytes()
+        except (OSError, subprocess.TimeoutExpired):
+            return mime, data
+
+    if len(normalized) > MAX_ARTWORK_DOWNLOAD_BYTES:
+        return mime, data
+    if _infer_image_mime(normalized) != "image/jpeg":
+        return mime, data
+    return "image/jpeg", normalized
 
 
 def _download_spotify_artwork(url: str) -> tuple[str, bytes] | None:
@@ -1321,6 +1643,7 @@ def _render_index(
     music_dirs: list[str],
     *,
     auto_artwork_status: dict[str, object] | None = None,
+    volume_normalization_status: dict[str, object] | None = None,
 ) -> str:
     rows = "\n".join(_render_track_row(track, view) for track in view.tracks)
     empty = ""
@@ -1366,8 +1689,11 @@ def _render_index(
       background: var(--panel);
     }}
     .wrap {{
-      width: min(1180px, calc(100vw - 32px));
+      width: min(1760px, calc(100vw - 24px));
       margin: 0 auto;
+    }}
+    .wrap-compact {{
+      width: min(1180px, calc(100vw - 32px));
     }}
     .topbar {{
       display: flex;
@@ -1508,6 +1834,15 @@ def _render_index(
     }}
     .spotify-url-form .spotify-action {{
       padding-inline: 8px;
+    }}
+    button.soundcloud-action {{
+      background: #f97316;
+      border-color: #f97316;
+      color: #fff;
+    }}
+    button.soundcloud-action:hover {{
+      background: #ea580c;
+      border-color: #ea580c;
     }}
     .spotify-action {{
       height: 28px;
@@ -1751,7 +2086,8 @@ def _render_index(
       th:nth-child(4), td:nth-child(4),
       th:nth-child(5), td:nth-child(5),
       th:nth-child(7), td:nth-child(7),
-      th:nth-child(9), td:nth-child(9) {{
+      th:nth-child(9), td:nth-child(9),
+      th:nth-child(11), td:nth-child(11) {{
         display: none;
       }}
       th, td {{
@@ -1773,6 +2109,7 @@ def _render_index(
   <main class="wrap">
     {_render_controls(view)}
     {_render_auto_artwork_status(auto_artwork_status)}
+    {_render_volume_normalization_status(volume_normalization_status)}
     <div class="viewbar">
       <span>Showing {showing_start}-{showing_end} of {view.filtered_count} matching tracks</span>
       {_render_pagination(view)}
@@ -1780,6 +2117,10 @@ def _render_index(
         <form method="post" action="/spotify-artwork-refresh">
           <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
           <button type="submit">Run Spotify sweep</button>
+        </form>
+        <form method="post" action="/volume-normalization">
+          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
+          <button type="submit">Run volume tag sweep</button>
         </form>
         <form method="post" action="/reindex">
           <button type="submit">Refresh index</button>
@@ -1800,6 +2141,7 @@ def _render_index(
           <th style="width: 6%">{_sort_link(view, "format")}</th>
           <th style="width: 7%">{_sort_link(view, "bitrate")}</th>
           <th style="width: 6%">{_sort_link(view, "duration")}</th>
+          <th style="width: 74px">Volume</th>
           <th class="spotify-cell">Source</th>
         </tr>
       </thead>
@@ -1903,7 +2245,47 @@ def _render_index(
         }}
       }}
 
+      function renderVolumeNormalizationStatus(status) {{
+        const node = document.getElementById("volume-normalization-status");
+        if (!node) return;
+        if (!status.running && Number(status.total || 0) === 0) {{
+          node.hidden = true;
+          return;
+        }}
+
+        node.hidden = false;
+        const total = Number(status.total || 0);
+        const processed = Number(status.processed || 0);
+        const tagged = Number(status.tagged || 0);
+        const skipped = Number(status.skipped || 0);
+        const failed = Number(status.failed || 0);
+        const escapeHtml = (value) => value
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#x27;");
+        const current = status.current ? ` · Current: <strong>${{escapeHtml(status.current)}}</strong>` : "";
+        if (status.running) {{
+          node.innerHTML = `<strong>Volume tag sweep running</strong> · ${{processed}}/${{total}} processed · ${{tagged}} tagged · ${{skipped}} skipped · ${{failed}} failed${{current}}`;
+          return;
+        }}
+        node.innerHTML = `<strong>Volume tag sweep complete</strong> · ${{processed}}/${{total}} processed · ${{tagged}} tagged · ${{skipped}} skipped · ${{failed}} failed`;
+      }}
+
+      async function pollVolumeNormalizationStatus() {{
+        const node = document.getElementById("volume-normalization-status");
+        if (!node || node.hidden) return;
+        const response = await fetch("/api/volume-normalization");
+        const status = await response.json();
+        renderVolumeNormalizationStatus(status);
+        if (status.running) {{
+          window.setTimeout(pollVolumeNormalizationStatus, 2500);
+        }}
+      }}
+
       pollAutoArtworkStatus();
+      pollVolumeNormalizationStatus();
 
       document.addEventListener("click", (event) => {{
         const opener = event.target.closest("[data-spotify-modal-url]");
@@ -1959,6 +2341,47 @@ def _render_auto_artwork_status(status: dict[str, object] | None) -> str:
         )
 
     return f'<div id="auto-artwork-status" class="auto-artwork" {hidden}>{text}</div>'
+
+
+def _render_volume_normalization_status(status: dict[str, object] | None) -> str:
+    if not status:
+        return (
+            '<div id="volume-normalization-status" class="auto-artwork" hidden></div>'
+        )
+
+    running = bool(status.get("running"))
+    total = _status_int(status.get("total"))
+    processed = _status_int(status.get("processed"))
+    tagged = _status_int(status.get("tagged"))
+    skipped = _status_int(status.get("skipped"))
+    failed = _status_int(status.get("failed"))
+    current = status.get("current")
+    hidden = "hidden" if not running and total == 0 else ""
+    if running:
+        current_html = (
+            f" · Current: <strong>{escape(str(current))}</strong>" if current else ""
+        )
+        text = (
+            "<strong>Volume tag sweep running</strong>"
+            f" · {processed}/{total} processed"
+            f" · {tagged} tagged"
+            f" · {skipped} skipped"
+            f" · {failed} failed"
+            f"{current_html}"
+        )
+    else:
+        text = (
+            "<strong>Volume tag sweep complete</strong>"
+            f" · {processed}/{total} processed"
+            f" · {tagged} tagged"
+            f" · {skipped} skipped"
+            f" · {failed} failed"
+        )
+
+    return (
+        f'<div id="volume-normalization-status" class="auto-artwork" '
+        f"{hidden}>{text}</div>"
+    )
 
 
 def _status_int(value: object) -> int:
@@ -2027,7 +2450,7 @@ def _render_spotify_link_idle(music_dirs: list[str]) -> str:
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
         body="""
-  <main class="wrap">
+  <main class="wrap wrap-compact">
     <div class="link-layout">
       <p class="empty">Choose a track from the collection list to search Spotify.</p>
       <a class="button" href="/">Back to collection</a>
@@ -2042,7 +2465,7 @@ def _render_spotify_link_done(music_dirs: list[str]) -> str:
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
         body="""
-  <main class="wrap">
+  <main class="wrap wrap-compact">
     <div class="link-layout">
       <p class="empty">That local track is no longer in the collection index.</p>
       <a class="button" href="/">Back to collection</a>
@@ -2073,7 +2496,7 @@ def _render_spotify_link_page(
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
         body=f"""
-  <main class="wrap">
+  <main class="wrap wrap-compact">
     {content}
   </main>
 """,
@@ -2248,6 +2671,9 @@ def _dashboard_css() -> str:
     .wrap {
       width: min(1180px, calc(100vw - 32px));
       margin: 0 auto;
+    }
+    .wrap-compact {
+      width: min(1180px, calc(100vw - 32px));
     }
     .topbar {
       display: flex;
@@ -2481,8 +2907,17 @@ def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
   <td><span class="pill">{escape(track.audio_format or "?")}</span></td>
   <td>{escape(_format_bitrate(track.bitrate))}</td>
   <td>{escape(_format_duration(track.duration_seconds))}</td>
+  <td>{_render_volume_track_action(track, return_to=_url_for(view))}</td>
   <td class="spotify-cell">{spotify_action}</td>
 </tr>"""
+
+
+def _render_volume_track_action(track: LocalTrack, *, return_to: str) -> str:
+    return f"""<form method="post" action="/volume-normalization/track">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    <button class="spotify-action" type="submit">Tag</button>
+  </form>"""
 
 
 def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
@@ -2493,6 +2928,8 @@ def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
         )
         return f"""<div class="spotify-actions">
   {linked}
+  {_refresh_soundcloud_art_action(track, return_to=return_to)}
+  {_wav_artwork_note(track)}
   {_spotify_find_link(track, return_to=return_to)}
   {_manual_spotify_url_form(track, return_to=return_to)}
   {_manual_soundcloud_url_form(track, return_to=return_to)}
@@ -2578,7 +3015,7 @@ def _manual_soundcloud_url_form(track: LocalTrack, *, return_to: str) -> str:
     <input type="hidden" name="path" value="{escape(str(track.path))}">
     <input type="hidden" name="return_to" value="{escape(return_to)}">
     {soundcloud_url_input}
-    <button class="spotify-action" type="submit">SC</button>
+    <button class="spotify-action soundcloud-action" type="submit">SC</button>
   </form>"""
 
 
@@ -2590,6 +3027,26 @@ def _refresh_spotify_art_action(track: LocalTrack, *, return_to: str) -> str:
     <input type="hidden" name="return_to" value="{escape(return_to)}">
     <button class="spotify-action" type="submit">Art</button>
   </form>"""
+
+
+def _refresh_soundcloud_art_action(track: LocalTrack, *, return_to: str) -> str:
+    if not track.soundcloud_url:
+        return ""
+    return f"""<form method="post" action="/soundcloud-link/refresh-art">
+    <input type="hidden" name="path" value="{escape(str(track.path))}">
+    <input type="hidden" name="return_to" value="{escape(return_to)}">
+    <button class="spotify-action" type="submit">Art</button>
+  </form>"""
+
+
+def _wav_artwork_note(track: LocalTrack) -> str:
+    if (track.audio_format or "").upper() != "WAV":
+        return ""
+    return (
+        '<span class="spotify-linked" '
+        'title="WAV has no standard embedded artwork support; Rekordbox may ignore cover art on tag reload.">'
+        "WAV art limit</span>"
+    )
 
 
 def _spotify_external_url_from_uri(uri: str) -> str | None:

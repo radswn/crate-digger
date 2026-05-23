@@ -10,12 +10,20 @@ from crate_digger.collection.index import _ensure_schema
 from crate_digger.collection.models import LocalTrack
 from crate_digger.web.app import (
     AutoArtworkRefreshState,
+    CollectionQuery,
+    CollectionView,
+    SpotifyFilter,
     SpotifyCandidate,
+    VolumeNormalizationState,
     _auto_artwork_refresh_snapshot,
     _auto_refresh_spotify_artwork,
     _build_collection_view,
     create_app,
     _download_spotify_artwork,
+    _normalize_single_track_volume_metadata,
+    _normalize_volume_metadata,
+    _replace_track_artwork_from_url,
+    _render_track_row,
     _render_spotify_candidate,
     _render_cover,
     _render_spotify_action,
@@ -24,6 +32,7 @@ from crate_digger.web.app import (
     _soundcloud_artwork_url_for_track_url,
     _soundcloud_url_from_input,
     _spotify_uri_from_input,
+    _volume_normalization_snapshot,
     _with_art_refresh,
 )
 
@@ -286,6 +295,27 @@ def test_spotify_link_actions_preserve_return_to():
     assert 'name="image_url" value="https://i.scdn.co/image/manual-cover"' in candidate
 
 
+def test_track_row_includes_single_track_volume_button():
+    track = seedless_track("/music/unlinked.mp3")
+    view = _collection_view_for_tracks(
+        [track],
+        q="night",
+        spotify="unlinked",
+        page=2,
+    )
+
+    row = _render_track_row(track, view)
+
+    assert "<th" not in row
+    assert 'action="/volume-normalization/track"' in row
+    assert 'name="path" value="/music/unlinked.mp3"' in row
+    assert 'name="return_to"' in row
+    assert "q=night" in row
+    assert "spotify=unlinked" in row
+    assert "page=2" in row
+    assert ">Tag</button>" in row
+
+
 def test_linked_spotify_action_keeps_manual_find_available():
     track = seedless_track("/music/linked.mp3", spotify_uri="spotify:track:linked")
     action = _render_spotify_action(track, return_to="/?spotify=linked")
@@ -309,10 +339,34 @@ def test_soundcloud_action_shows_linked_source_and_correction_controls():
 
     assert "https://soundcloud.com/ada/night-track" in action
     assert ">SoundCloud</a>" in action
+    assert 'action="/soundcloud-link/refresh-art"' in action
+    assert ">Art</button>" in action
     assert ">Find</a>" in action
     assert 'action="/spotify-link/manual"' in action
     assert 'action="/soundcloud-link/manual"' in action
     assert 'action="/spotify-link/quick-link"' not in action
+
+
+def test_soundcloud_wav_action_warns_about_rekordbox_art_limit():
+    track = seedless_track(
+        "/music/soundcloud.wav",
+        soundcloud_url="https://soundcloud.com/ada/night-track",
+    )
+    track = LocalTrack(
+        path=track.path,
+        title=track.title,
+        artist=track.artist,
+        album=track.album,
+        duration_seconds=track.duration_seconds,
+        bitrate=track.bitrate,
+        audio_format="WAV",
+        soundcloud_url=track.soundcloud_url,
+    )
+
+    action = _render_spotify_action(track, return_to="/?spotify=linked")
+
+    assert "WAV art limit" in action
+    assert "Rekordbox may ignore cover art" in action
 
 
 def test_linked_spotify_action_hides_art_refresh_when_cover_exists():
@@ -379,7 +433,7 @@ def test_soundcloud_url_from_input_accepts_soundcloud_urls():
     assert _soundcloud_url_from_input("https://soundcloud.com") is None
 
 
-def test_dashboard_startup_does_not_start_spotify_sweep(tmp_path, monkeypatch):
+def test_dashboard_startup_does_not_start_manual_sweeps(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -396,15 +450,24 @@ music-dirs = []
 """,
         encoding="utf-8",
     )
-    calls = []
+    spotify_calls = []
+    volume_calls = []
 
     def fake_start_auto_artwork_refresh(**kwargs):
-        calls.append(kwargs)
+        spotify_calls.append(kwargs)
+        return True
+
+    def fake_start_volume_normalization(**kwargs):
+        volume_calls.append(kwargs)
         return True
 
     monkeypatch.setattr(
         "crate_digger.web.app._start_auto_artwork_refresh",
         fake_start_auto_artwork_refresh,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_volume_normalization",
+        fake_start_volume_normalization,
     )
 
     with TestClient(
@@ -415,7 +478,8 @@ music-dirs = []
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert calls == []
+    assert spotify_calls == []
+    assert volume_calls == []
 
 
 def test_spotify_sweep_button_starts_refresh(tmp_path, monkeypatch):
@@ -461,6 +525,98 @@ music-dirs = []
     assert response.status_code == 303
     assert response.headers["location"] == "/?spotify=unlinked&page=2"
     assert calls == [(str(config_path), str(db_path), False)]
+
+
+def test_volume_normalization_button_starts_sweep(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    calls = []
+
+    def fake_start_volume_normalization(*, db_path, state):
+        calls.append((str(db_path), state.running))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_volume_normalization",
+        fake_start_volume_normalization,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    page = client.get("/")
+    assert 'action="/volume-normalization"' in page.text
+    assert ">Run volume tag sweep</button>" in page.text
+
+    response = client.post(
+        "/volume-normalization",
+        data={"return_to": "/?format=MP3&page=2"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?format=MP3&page=2"
+    assert calls == [(str(db_path), False)]
+
+
+def test_single_track_volume_normalization_button_starts_track_job(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    calls = []
+
+    def fake_start_single_track_volume_normalization(*, db_path, path, state):
+        calls.append((str(db_path), path, state.running))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_single_track_volume_normalization",
+        fake_start_single_track_volume_normalization,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/volume-normalization/track",
+        data={
+            "path": "/music/test.mp3",
+            "return_to": "/?q=test&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?q=test&page=2"
+    assert calls == [(str(db_path), "/music/test.mp3", False)]
 
 
 def test_safe_return_to_allows_only_local_paths():
@@ -972,6 +1128,77 @@ music-dirs = []
     ]
 
 
+def test_refresh_soundcloud_art_schedules_from_saved_url(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    seed_track(
+        db_path,
+        "linked.mp3",
+        title="Linked",
+        artist="Ada",
+        album="Album",
+        bitrate=320000,
+        audio_format="MP3",
+        soundcloud_url="https://soundcloud.com/ada/night-track",
+    )
+    calls = []
+
+    def fake_start_track_artwork_replacement_from_soundcloud_url(
+        *,
+        db_path,
+        path,
+        soundcloud_url,
+    ):
+        calls.append((str(db_path), path, soundcloud_url))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_track_artwork_replacement_from_soundcloud_url",
+        fake_start_track_artwork_replacement_from_soundcloud_url,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/soundcloud-link/refresh-art",
+        data={
+            "path": "/music/linked.mp3",
+            "return_to": "/?spotify=linked&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == (
+        "/?spotify=linked&page=2&art_refresh=1&art_path=%2Fmusic%2Flinked.mp3"
+    )
+    assert calls == [
+        (
+            str(db_path),
+            "/music/linked.mp3",
+            "https://soundcloud.com/ada/night-track",
+        )
+    ]
+
+
 def test_manual_soundcloud_link_ignores_invalid_url(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
@@ -1094,6 +1321,111 @@ def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
     assert snapshot["total"] == 1
     assert snapshot["processed"] == 1
     assert snapshot["artwork_updated"] == 1
+    assert snapshot["failed"] == 0
+
+
+def test_volume_normalization_tags_tracks_and_refreshes_index(tmp_path, monkeypatch):
+    state = VolumeNormalizationState()
+    db_path = tmp_path / "collection.sqlite3"
+    tagged_track = seedless_track("/music/tagged.mp3")
+    skipped_track = seedless_track("/music/skipped.mp3")
+    tagged = []
+    refreshed = []
+
+    monkeypatch.setattr(
+        "crate_digger.web.app.list_tracks_for_volume_normalization",
+        lambda _db_path: [tagged_track, skipped_track],
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.write_volume_normalization_tags",
+        lambda path: tagged.append(str(path)) or str(path).endswith("tagged.mp3"),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.refresh_track_metadata",
+        lambda db_path, *, path: refreshed.append((str(db_path), path)) or True,
+    )
+
+    _normalize_volume_metadata(db_path=db_path, state=state)
+    snapshot = _volume_normalization_snapshot(state)
+
+    assert tagged == ["/music/tagged.mp3", "/music/skipped.mp3"]
+    assert refreshed == [(str(db_path), "/music/tagged.mp3")]
+    assert snapshot["total"] == 2
+    assert snapshot["processed"] == 2
+    assert snapshot["tagged"] == 1
+    assert snapshot["skipped"] == 1
+    assert snapshot["failed"] == 0
+
+
+def test_single_track_volume_normalization_tags_one_track(tmp_path, monkeypatch):
+    state = VolumeNormalizationState()
+    db_path = tmp_path / "collection.sqlite3"
+    tagged = []
+    refreshed = []
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.write_volume_normalization_tags",
+        lambda path: tagged.append(str(path)) or True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.refresh_track_metadata",
+        lambda db_path, *, path: refreshed.append((str(db_path), path)) or True,
+    )
+
+    _normalize_single_track_volume_metadata(
+        db_path=db_path,
+        path="/music/one.mp3",
+        state=state,
+    )
+    snapshot = _volume_normalization_snapshot(state)
+
+    assert tagged == ["/music/one.mp3"]
+    assert refreshed == [(str(db_path), "/music/one.mp3")]
+    assert snapshot["total"] == 1
+    assert snapshot["processed"] == 1
+    assert snapshot["tagged"] == 1
+    assert snapshot["skipped"] == 0
+    assert snapshot["failed"] == 0
+
+
+def test_single_track_volume_normalization_prunes_deleted_track(
+    tmp_path,
+    monkeypatch,
+):
+    state = VolumeNormalizationState()
+    db_path = tmp_path / "collection.sqlite3"
+
+    def fail_write_volume_normalization_tags(_path):
+        raise AssertionError("deleted tracks must not be tagged")
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: False,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.write_volume_normalization_tags",
+        fail_write_volume_normalization_tags,
+    )
+
+    _normalize_single_track_volume_metadata(
+        db_path=db_path,
+        path="/music/deleted.mp3",
+        state=state,
+    )
+    snapshot = _volume_normalization_snapshot(state)
+
+    assert snapshot["total"] == 1
+    assert snapshot["processed"] == 1
+    assert snapshot["tagged"] == 0
+    assert snapshot["skipped"] == 1
     assert snapshot["failed"] == 0
 
 
@@ -1592,6 +1924,46 @@ def test_download_spotify_artwork_uses_curl_helper_when_available(monkeypatch):
     )
 
 
+def test_soundcloud_artwork_replacement_normalizes_before_embedding(
+    tmp_path,
+    monkeypatch,
+):
+    track = tmp_path / "track.mp3"
+    track.write_bytes(b"not real audio")
+    embedded = []
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._download_spotify_artwork",
+        lambda _url: ("image/png", b"\x89PNG\r\n\x1a\ncover"),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app._normalize_artwork_for_rekordbox",
+        lambda *, mime, data: ("image/jpeg", b"\xff\xd8\xffnormalized"),
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.overwrite_embedded_artwork",
+        lambda path, *, mime, data: embedded.append((path, mime, data)) or True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.refresh_track_metadata",
+        lambda _db_path, *, path: True,
+    )
+
+    assert _replace_track_artwork_from_url(
+        tmp_path / "collection.sqlite3",
+        path=str(track),
+        image_url="https://i1.sndcdn.com/artworks-cover-t500x500.jpg",
+        normalize_for_rekordbox=True,
+    )
+    assert embedded == [
+        (track, "image/jpeg", b"\xff\xd8\xffnormalized"),
+    ]
+
+
 def test_soundcloud_artwork_url_uses_oembed_thumbnail(monkeypatch):
     class Response:
         def __enter__(self):
@@ -1726,4 +2098,30 @@ def seedless_track(
         spotify_uri=spotify_uri,
         soundcloud_url=soundcloud_url,
         spotify_link_skipped_at=spotify_link_skipped_at,
+    )
+
+
+def _collection_view_for_tracks(
+    tracks: list[LocalTrack],
+    *,
+    q: str = "",
+    spotify: SpotifyFilter = "all",
+    page: int = 1,
+) -> CollectionView:
+    return CollectionView(
+        query=CollectionQuery(
+            q=q,
+            audio_format="",
+            metadata="all",
+            spotify=spotify,
+            sort="title",
+            direction="asc",
+            page=page,
+            page_size=10,
+        ),
+        tracks=tracks,
+        filtered_count=len(tracks),
+        total_count=len(tracks),
+        total_pages=1,
+        formats=[],
     )

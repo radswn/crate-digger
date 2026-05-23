@@ -80,7 +80,7 @@ def test_normalize_spotify_scope_is_stable_for_cache_names():
 
 def test_noninteractive_spotify_auth_requires_cached_token(tmp_path):
     cache_path = tmp_path / ".cache-playlist-read-private"
-    cache_handler = m.LockedCacheFileHandler(cache_path)
+    cache_handler = m.SpotifyCacheFileHandler(cache_path)
 
     try:
         m._assert_cached_token_covers_scope(
@@ -96,7 +96,7 @@ def test_noninteractive_spotify_auth_requires_cached_token(tmp_path):
 
 def test_noninteractive_spotify_auth_validates_cached_scope(tmp_path):
     cache_path = tmp_path / ".cache-playlist-read-private"
-    cache_handler = m.LockedCacheFileHandler(cache_path)
+    cache_handler = m.SpotifyCacheFileHandler(cache_path)
     cache_handler.save_token_to_cache(
         {
             "access_token": "access",

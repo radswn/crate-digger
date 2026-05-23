@@ -229,6 +229,41 @@ def list_tracks_pending_spotify_linking(
     return [_track_from_row(row) for row in rows]
 
 
+def list_tracks_for_volume_normalization(
+    db_path: Path = DEFAULT_COLLECTION_DB_PATH,
+) -> list[LocalTrack]:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_schema(conn)
+        rows = conn.execute(
+            """
+            select
+                path,
+                title,
+                artist,
+                album,
+                comment,
+                genre,
+                release_date,
+                file_created_at,
+                duration_seconds,
+                bitrate,
+                audio_format,
+                artwork_mime,
+                spotify_uri,
+                soundcloud_url,
+                spotify_link_skipped_at,
+                indexed_at
+            from tracks
+            order by lower(coalesce(nullif(artist, ''), '')),
+                     lower(coalesce(nullif(title, ''), stem)),
+                     lower(path)
+            """
+        ).fetchall()
+
+    return [_track_from_row(row) for row in rows]
+
+
 def set_track_spotify_uri(
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
     *,

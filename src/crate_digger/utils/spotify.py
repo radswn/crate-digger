@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import time
-from contextlib import contextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence, Tuple
@@ -47,41 +46,22 @@ class NonInteractiveSpotifyOAuth(SpotifyOAuth):
         )
 
 
-class LockedCacheFileHandler(CacheFileHandler):
-    """Spotipy cache handler guarded by a sidecar lock file."""
+class SpotifyCacheFileHandler(CacheFileHandler):
+    """Spotipy cache handler with clearer cache read errors."""
 
     def __init__(self, cache_path: Path) -> None:
-        self._lock_path = cache_path.with_name(f"{cache_path.name}.lock")
         super().__init__(cache_path=str(cache_path))
 
     def get_cached_token(self) -> dict[str, Any] | None:
-        with self._cache_lock():
-            try:
-                return super().get_cached_token()
-            except (OSError, ValueError) as exc:
-                raise SpotifyTokenCacheError(
-                    f"Could not read Spotify token cache {self.cache_path!r}: {exc}"
-                ) from exc
+        try:
+            return super().get_cached_token()
+        except (OSError, ValueError) as exc:
+            raise SpotifyTokenCacheError(
+                f"Could not read Spotify token cache {self.cache_path!r}: {exc}"
+            ) from exc
 
     def save_token_to_cache(self, token_info: dict[str, Any]) -> None:
-        with self._cache_lock():
-            super().save_token_to_cache(token_info)
-
-    @contextmanager
-    def _cache_lock(self):
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock_path.open("a+", encoding="utf-8") as lock_file:
-            try:
-                import fcntl
-            except ImportError:
-                yield
-                return
-
-            try:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        super().save_token_to_cache(token_info)
 
 
 def sleep_between_requests(delay_seconds: float) -> None:
@@ -114,7 +94,7 @@ def get_spotify_client(
     if allow_browser_auth is None:
         allow_browser_auth = _should_allow_browser_auth()
 
-    cache_handler = LockedCacheFileHandler(cache_path=cache_path)
+    cache_handler = SpotifyCacheFileHandler(cache_path=cache_path)
     if not allow_browser_auth:
         _assert_cached_token_covers_scope(
             cache_handler,
@@ -154,7 +134,7 @@ def _should_allow_browser_auth() -> bool:
 
 
 def _assert_cached_token_covers_scope(
-    cache_handler: LockedCacheFileHandler,
+    cache_handler: SpotifyCacheFileHandler,
     *,
     scope: str,
     cache_path: Path,

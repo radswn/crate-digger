@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from mutagen import File, MutagenError
+from mutagen.aiff import AIFF
 from mutagen.flac import FLAC, Picture
 from mutagen.id3 import APIC, ID3NoHeaderError
 from mutagen.mp3 import MP3
@@ -142,6 +143,8 @@ def overwrite_embedded_artwork(path: Path, *, mime: str, data: bytes) -> bool:
             _overwrite_mp4_artwork(path, mime=mime, data=data)
         elif suffix == ".wav":
             _overwrite_wav_artwork(path, mime=mime, data=data)
+        elif suffix in {".aiff", ".aif"}:
+            _overwrite_aiff_artwork(path, mime=mime, data=data)
         else:
             return False
     except (MutagenError, OSError):
@@ -194,6 +197,17 @@ def _overwrite_mp4_artwork(path: Path, *, mime: str, data: bytes) -> None:
 
 def _overwrite_wav_artwork(path: Path, *, mime: str, data: bytes) -> None:
     audio = WAVE(path)
+    _overwrite_id3_artwork(audio, mime=mime, data=data)
+    audio.save()
+
+
+def _overwrite_aiff_artwork(path: Path, *, mime: str, data: bytes) -> None:
+    audio = AIFF(path)
+    _overwrite_id3_artwork(audio, mime=mime, data=data)
+    audio.save()
+
+
+def _overwrite_id3_artwork(audio: Any, *, mime: str, data: bytes) -> None:
     if audio.tags is None:
         audio.add_tags()
     if audio.tags is None:
@@ -209,7 +223,6 @@ def _overwrite_wav_artwork(path: Path, *, mime: str, data: bytes) -> None:
             data=data,
         )
     )
-    audio.save()
 
 
 def _first_picture(pictures: object) -> object | None:

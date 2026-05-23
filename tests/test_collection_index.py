@@ -5,6 +5,7 @@ from crate_digger.collection.index import (
     get_track_artwork,
     get_track_for_spotify_linking,
     list_tracks_missing_spotify_artwork,
+    list_tracks_for_volume_normalization,
     list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
@@ -294,6 +295,37 @@ def test_list_tracks_pending_spotify_linking_returns_unlinked_unskipped_tracks(
     tracks = list_tracks_pending_spotify_linking(db_path)
 
     assert [str(track.path) for track in tracks] == ["/music/pending.mp3"]
+
+
+def test_list_tracks_for_volume_normalization_returns_all_indexed_tracks(tmp_path):
+    db_path = tmp_path / "collection.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        _ensure_schema(conn)
+        for name in ["bravo", "alpha"]:
+            conn.execute(
+                """
+                insert into tracks (
+                    path,
+                    stem,
+                    title,
+                    artist,
+                    audio_format,
+                    artwork_checked,
+                    size,
+                    mtime_ns,
+                    indexed_at
+                )
+                values (?, ?, ?, 'Ada', 'MP3', 1, 1, 1, '2026-01-01T00:00:00+00:00')
+                """,
+                (f"/music/{name}.mp3", name, name.title()),
+            )
+
+    tracks = list_tracks_for_volume_normalization(db_path)
+
+    assert [str(track.path) for track in tracks] == [
+        "/music/alpha.mp3",
+        "/music/bravo.mp3",
+    ]
 
 
 def test_query_tracks_filters_by_spotify_status(tmp_path):
