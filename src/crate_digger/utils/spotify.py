@@ -275,7 +275,7 @@ def fetch_and_add(
     record_labels: List[str],
     target_playlist: str,
 ) -> Dict[str, Dict[str, List[SpotifyTrack]]]:
-    """Fetch past day releases from labels, deduplicate, and add to playlist.
+    """Fetch past week releases from labels, deduplicate, and add to playlist.
 
     Args:
         client: Authenticated Spotify client
@@ -311,18 +311,18 @@ def fetch_and_add(
 
 
 def fetch_new_relevant_releases(client: Spotify, label: str) -> List[SpotifyAlbum]:
-    """Fetch past day releases from a label with exact label name matching.
+    """Fetch past week releases from a label with exact label name matching.
 
     Args:
         client: Authenticated Spotify client
         label: Record label name to search for
 
     Returns:
-        List of album objects released exactly n days ago with exact label match
+        List of album objects released within the past week with exact label match
     """
     new_releases = fetch_new_releases(client, label)
-    yesterdays_releases = filter_releases_by_date(new_releases, n_days=1)
-    relevant_releases = filter_exact_label_releases(client, yesterdays_releases, label)
+    past_week_releases = filter_releases_by_date(new_releases, n_days=7)
+    relevant_releases = filter_exact_label_releases(client, past_week_releases, label)
 
     n_releases = len(relevant_releases)
     logger.info(
@@ -358,16 +358,21 @@ def batch(iterable: Sequence[str], size: int) -> Iterable[Sequence[str]]:
 def filter_releases_by_date(
     releases: List[SpotifyAlbum], n_days: int = 7
 ) -> List[SpotifyAlbum]:
-    """Filter releases to only those with release dates exactly n days ago.
+    """Filter releases to only those with release dates in the past n days.
 
     Args:
         releases: List of Spotify album objects
 
     Returns:
-        Filtered list containing only releases exactly n days ago
+        Filtered list containing releases from today minus n days through today
     """
-    target_date = date.today() - timedelta(days=n_days)
-    return [r for r in releases if date.fromisoformat(r["release_date"]) == target_date]
+    today = date.today()
+    earliest_date = today - timedelta(days=n_days)
+    return [
+        r
+        for r in releases
+        if earliest_date <= date.fromisoformat(r["release_date"]) <= today
+    ]
 
 
 def filter_exact_label_releases(

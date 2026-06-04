@@ -141,7 +141,7 @@ make dashboard
 uv run python -m crate_digger.main.fetch_new_releases
 ```
 
-- Fetches releases from followed labels for yesterday
+- Fetches releases from followed labels from the past week
 - Deduplicates and removes extended versions
 - Adds unique tracks to your "to-listen" playlist
 - Sends a compact Telegram summary

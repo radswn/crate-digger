@@ -34,7 +34,7 @@ def test_filter_past_week_releases_filters_correctly(monkeypatch):
     FakeDate._today = SimpleNamespace(
         isoformat=lambda: "2026-01-21"
     )  # minimal stub for .isoformat()
-    # We need .today() returning something with isoformat(); timedelta(days=1) will be applied to it in your code
+    # We need .today() returning something with isoformat(); timedelta will be applied to it in your code
     # so we patch the module's date with a *real* date-like object instead:
     import datetime as _dt
 
@@ -49,6 +49,10 @@ def test_filter_past_week_releases_filters_correctly(monkeypatch):
         List[SpotifyAlbum],
         [
             {
+                "release_date": "2026-01-21",
+                "uri": "today",
+            },
+            {
                 "release_date": "2026-01-20",
                 "uri": "a",
             },
@@ -60,11 +64,15 @@ def test_filter_past_week_releases_filters_correctly(monkeypatch):
                 "release_date": "2026-01-14",
                 "uri": "c",
             },
+            {
+                "release_date": "2026-01-22",
+                "uri": "future",
+            },
         ],
     )
 
-    out = m.filter_releases_by_date(releases, n_days=1)
-    assert [r["uri"] for r in out] == ["a"]
+    out = m.filter_releases_by_date(releases, n_days=7)
+    assert [r["uri"] for r in out] == ["today", "a", "c"]
 
 
 def test_normalize_spotify_scope_is_stable_for_cache_names():
@@ -575,7 +583,9 @@ def test_fetch_new_relevant_releases_pipeline_calls_substeps(monkeypatch):
     ]
 
     mock_fetch.assert_called_once()
-    mock_filter_releases_by_date.assert_called_once()
+    mock_filter_releases_by_date.assert_called_once_with(
+        mock_fetch.return_value, n_days=7
+    )
     mock_filter_exact.assert_called_once()
 
 
