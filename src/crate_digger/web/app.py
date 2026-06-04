@@ -23,8 +23,8 @@ from crate_digger.collection.index import (
     delete_track,
     get_track_artwork,
     get_track_for_spotify_linking,
+    list_tracks_for_comment_cleanup,
     list_tracks_missing_spotify_artwork,
-    list_tracks_for_volume_normalization,
     list_tracks_pending_spotify_linking,
     query_tracks,
     refresh_collection_index,
@@ -33,8 +33,12 @@ from crate_digger.collection.index import (
     set_track_spotify_uri,
     skip_track_spotify_link,
 )
+from crate_digger.collection.comments import (
+    CommentCleanupWriteResult,
+    clear_comment,
+    write_rekordbox_comment_tags_only,
+)
 from crate_digger.collection.models import LocalTrack
-from crate_digger.collection.normalization import write_volume_normalization_tags
 from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.logging import get_logger
@@ -145,14 +149,15 @@ class AutoArtworkRefreshState:
 
 
 @dataclass
-class VolumeNormalizationState:
+class CommentCleanupState:
     running: bool = False
     total: int = 0
     processed: int = 0
-    tagged: int = 0
+    cleaned: int = 0
     skipped: int = 0
     failed: int = 0
     current: str | None = None
+    last_result: dict[str, object] | None = None
     started_at: str | None = None
     finished_at: str | None = None
     lock: Lock = field(default_factory=Lock, repr=False)
@@ -170,7 +175,7 @@ def create_app(
             db_path=db_path,
         )
         app.state.auto_artwork_refresh_state = AutoArtworkRefreshState()
-        app.state.volume_normalization_state = VolumeNormalizationState()
+        app.state.comment_cleanup_state = CommentCleanupState()
         yield
 
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
@@ -238,8 +243,8 @@ def create_app(
                 auto_artwork_status=_auto_artwork_refresh_snapshot(
                     _get_auto_artwork_refresh_state(app)
                 ),
-                volume_normalization_status=_volume_normalization_snapshot(
-                    _get_volume_normalization_state(app)
+                comment_cleanup_status=_comment_cleanup_snapshot(
+                    _get_comment_cleanup_state(app)
                 ),
             )
         )
@@ -248,9 +253,9 @@ def create_app(
     def spotify_artwork_refresh_status() -> dict[str, object]:
         return _auto_artwork_refresh_snapshot(_get_auto_artwork_refresh_state(app))
 
-    @app.get("/api/volume-normalization")
-    def volume_normalization_status() -> dict[str, object]:
-        return _volume_normalization_snapshot(_get_volume_normalization_state(app))
+    @app.get("/api/comment-cleanup")
+    def comment_cleanup_status() -> dict[str, object]:
+        return _comment_cleanup_snapshot(_get_comment_cleanup_state(app))
 
     @app.post("/spotify-artwork-refresh")
     async def start_spotify_artwork_refresh(request: Request) -> RedirectResponse:
@@ -263,25 +268,47 @@ def create_app(
         )
         return RedirectResponse(return_to, status_code=303)
 
-    @app.post("/volume-normalization")
-    async def start_volume_normalization(request: Request) -> RedirectResponse:
+    @app.post("/comment-cleanup")
+    async def start_comment_cleanup(request: Request) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
         return_to = _safe_return_to(form.get("return_to"))
-        _start_volume_normalization(
+        _start_comment_cleanup(
             db_path=db_path,
-            state=_get_volume_normalization_state(app),
+            state=_get_comment_cleanup_state(app),
         )
         return RedirectResponse(return_to, status_code=303)
 
-    @app.post("/volume-normalization/track")
-    async def start_track_volume_normalization(request: Request) -> RedirectResponse:
+    @app.post("/comment-cleanup/track")
+    async def start_track_comment_cleanup(request: Request) -> RedirectResponse:
         form = _parse_urlencoded_form(await request.body())
         path = form["path"]
         return_to = _safe_return_to(form.get("return_to"))
-        _start_single_track_volume_normalization(
+        _start_single_track_comment_cleanup(
             db_path=db_path,
             path=path,
-            state=_get_volume_normalization_state(app),
+            state=_get_comment_cleanup_state(app),
+        )
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/comment-clear")
+    async def start_comment_clear(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        return_to = _safe_return_to(form.get("return_to"))
+        _start_comment_clear(
+            db_path=db_path,
+            state=_get_comment_cleanup_state(app),
+        )
+        return RedirectResponse(return_to, status_code=303)
+
+    @app.post("/comment-clear/track")
+    async def start_track_comment_clear(request: Request) -> RedirectResponse:
+        form = _parse_urlencoded_form(await request.body())
+        path = form["path"]
+        return_to = _safe_return_to(form.get("return_to"))
+        _start_single_track_comment_clear(
+            db_path=db_path,
+            path=path,
+            state=_get_comment_cleanup_state(app),
         )
         return RedirectResponse(return_to, status_code=303)
 
@@ -565,13 +592,13 @@ def _get_auto_artwork_refresh_state(app: FastAPI) -> AutoArtworkRefreshState:
     return state
 
 
-def _get_volume_normalization_state(app: FastAPI) -> VolumeNormalizationState:
-    state = getattr(app.state, "volume_normalization_state", None)
-    if isinstance(state, VolumeNormalizationState):
+def _get_comment_cleanup_state(app: FastAPI) -> CommentCleanupState:
+    state = getattr(app.state, "comment_cleanup_state", None)
+    if isinstance(state, CommentCleanupState):
         return state
 
-    state = VolumeNormalizationState(finished_at=_now_iso())
-    app.state.volume_normalization_state = state
+    state = CommentCleanupState(finished_at=_now_iso())
+    app.state.comment_cleanup_state = state
     return state
 
 
@@ -604,10 +631,73 @@ def _start_auto_artwork_refresh(
     return True
 
 
-def _start_volume_normalization(
+def _start_comment_cleanup(
     *,
     db_path: Path,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+) -> bool:
+    return _start_comment_job(
+        db_path=db_path,
+        state=state,
+        writer=write_rekordbox_comment_tags_only,
+        thread_name="comment-cleanup",
+        clear_all=False,
+    )
+
+
+def _start_single_track_comment_cleanup(
+    *,
+    db_path: Path,
+    path: str,
+    state: CommentCleanupState,
+) -> bool:
+    return _start_single_track_comment_job(
+        db_path=db_path,
+        path=path,
+        state=state,
+        writer=write_rekordbox_comment_tags_only,
+        thread_name="comment-cleanup-track",
+        clear_all=False,
+    )
+
+
+def _start_comment_clear(
+    *,
+    db_path: Path,
+    state: CommentCleanupState,
+) -> bool:
+    return _start_comment_job(
+        db_path=db_path,
+        state=state,
+        writer=clear_comment,
+        thread_name="comment-clear",
+        clear_all=True,
+    )
+
+
+def _start_single_track_comment_clear(
+    *,
+    db_path: Path,
+    path: str,
+    state: CommentCleanupState,
+) -> bool:
+    return _start_single_track_comment_job(
+        db_path=db_path,
+        path=path,
+        state=state,
+        writer=clear_comment,
+        thread_name="comment-clear-track",
+        clear_all=True,
+    )
+
+
+def _start_comment_job(
+    *,
+    db_path: Path,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult],
+    thread_name: str,
+    clear_all: bool,
 ) -> bool:
     with state.lock:
         if state.running:
@@ -615,27 +705,36 @@ def _start_volume_normalization(
         state.running = True
         state.total = 0
         state.processed = 0
-        state.tagged = 0
+        state.cleaned = 0
         state.skipped = 0
         state.failed = 0
         state.current = None
+        state.last_result = None
         state.started_at = _now_iso()
         state.finished_at = None
 
     Thread(
-        target=_normalize_volume_metadata_safely,
-        kwargs={"db_path": db_path, "state": state},
-        name="volume-normalization",
+        target=_cleanup_comment_metadata_safely,
+        kwargs={
+            "db_path": db_path,
+            "state": state,
+            "writer": writer,
+            "clear_all": clear_all,
+        },
+        name=thread_name,
         daemon=True,
     ).start()
     return True
 
 
-def _start_single_track_volume_normalization(
+def _start_single_track_comment_job(
     *,
     db_path: Path,
     path: str,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult],
+    thread_name: str,
+    clear_all: bool,
 ) -> bool:
     with state.lock:
         if state.running:
@@ -643,31 +742,45 @@ def _start_single_track_volume_normalization(
         state.running = True
         state.total = 1
         state.processed = 0
-        state.tagged = 0
+        state.cleaned = 0
         state.skipped = 0
         state.failed = 0
         state.current = Path(path).stem
+        state.last_result = None
         state.started_at = _now_iso()
         state.finished_at = None
 
     Thread(
-        target=_normalize_single_track_volume_metadata_safely,
-        kwargs={"db_path": db_path, "path": path, "state": state},
-        name="volume-normalization-track",
+        target=_cleanup_single_track_comment_metadata_safely,
+        kwargs={
+            "db_path": db_path,
+            "path": path,
+            "state": state,
+            "writer": writer,
+            "clear_all": clear_all,
+        },
+        name=thread_name,
         daemon=True,
     ).start()
     return True
 
 
-def _normalize_volume_metadata_safely(
+def _cleanup_comment_metadata_safely(
     *,
     db_path: Path,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult],
+    clear_all: bool,
 ) -> None:
     try:
-        _normalize_volume_metadata(db_path=db_path, state=state)
+        _cleanup_comment_metadata(
+            db_path=db_path,
+            state=state,
+            writer=writer,
+            clear_all=clear_all,
+        )
     except Exception:
-        logger.exception("Volume normalization tag sweep failed")
+        logger.exception("Comment cleanup sweep failed")
     finally:
         with state.lock:
             state.running = False
@@ -675,16 +788,24 @@ def _normalize_volume_metadata_safely(
             state.finished_at = _now_iso()
 
 
-def _normalize_single_track_volume_metadata_safely(
+def _cleanup_single_track_comment_metadata_safely(
     *,
     db_path: Path,
     path: str,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult],
+    clear_all: bool,
 ) -> None:
     try:
-        _normalize_single_track_volume_metadata(db_path=db_path, path=path, state=state)
+        _cleanup_single_track_comment_metadata(
+            db_path=db_path,
+            path=path,
+            state=state,
+            writer=writer,
+            clear_all=clear_all,
+        )
     except Exception:
-        logger.exception("Single-track volume normalization tag write failed")
+        logger.exception("Single-track comment cleanup failed")
     finally:
         with state.lock:
             state.running = False
@@ -692,12 +813,15 @@ def _normalize_single_track_volume_metadata_safely(
             state.finished_at = _now_iso()
 
 
-def _normalize_volume_metadata(
+def _cleanup_comment_metadata(
     *,
     db_path: Path,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult] | None = None,
+    clear_all: bool = False,
 ) -> None:
-    tracks = list_tracks_for_volume_normalization(db_path)
+    tracks = list_tracks_for_comment_cleanup(db_path)
+    comment_writer = writer or write_rekordbox_comment_tags_only
     with state.lock:
         state.total = len(tracks)
 
@@ -713,10 +837,12 @@ def _normalize_volume_metadata(
             continue
 
         try:
-            tagged = write_volume_normalization_tags(track.path)
-            refreshed = refresh_track_metadata(db_path, path=path) if tagged else False
+            result = comment_writer(track.path)
+            refreshed = (
+                refresh_track_metadata(db_path, path=path) if result.cleaned else False
+            )
         except Exception:
-            logger.exception("Failed volume normalization tags for %s", path)
+            logger.exception("Failed comment cleanup for %s", path)
             with state.lock:
                 state.processed += 1
                 state.failed += 1
@@ -724,20 +850,29 @@ def _normalize_volume_metadata(
 
         with state.lock:
             state.processed += 1
-            if tagged and refreshed:
-                state.tagged += 1
-            elif tagged:
+            state.last_result = _comment_cleanup_result_snapshot(
+                track=track,
+                result=result,
+                refreshed=refreshed,
+                clear_all=clear_all,
+            )
+            if result.cleaned and refreshed:
+                state.cleaned += 1
+            elif result.cleaned:
                 state.failed += 1
             else:
                 state.skipped += 1
 
 
-def _normalize_single_track_volume_metadata(
+def _cleanup_single_track_comment_metadata(
     *,
     db_path: Path,
     path: str,
-    state: VolumeNormalizationState,
+    state: CommentCleanupState,
+    writer: Callable[[Path], CommentCleanupWriteResult] | None = None,
+    clear_all: bool = False,
 ) -> None:
+    comment_writer = writer or write_rekordbox_comment_tags_only
     with state.lock:
         state.total = 1
 
@@ -748,10 +883,12 @@ def _normalize_single_track_volume_metadata(
         return
 
     try:
-        tagged = write_volume_normalization_tags(Path(path))
-        refreshed = refresh_track_metadata(db_path, path=path) if tagged else False
+        result = comment_writer(Path(path))
+        refreshed = (
+            refresh_track_metadata(db_path, path=path) if result.cleaned else False
+        )
     except Exception:
-        logger.exception("Failed volume normalization tags for %s", path)
+        logger.exception("Failed comment cleanup for %s", path)
         with state.lock:
             state.processed = 1
             state.failed = 1
@@ -759,9 +896,16 @@ def _normalize_single_track_volume_metadata(
 
     with state.lock:
         state.processed = 1
-        if tagged and refreshed:
-            state.tagged = 1
-        elif tagged:
+        state.last_result = _comment_cleanup_result_snapshot(
+            track=None,
+            path=path,
+            result=result,
+            refreshed=refreshed,
+            clear_all=clear_all,
+        )
+        if result.cleaned and refreshed:
+            state.cleaned = 1
+        elif result.cleaned:
             state.failed = 1
         else:
             state.skipped = 1
@@ -959,18 +1103,44 @@ def _auto_artwork_refresh_snapshot(
         }
 
 
-def _volume_normalization_snapshot(
-    state: VolumeNormalizationState,
+def _comment_cleanup_result_snapshot(
+    *,
+    result: CommentCleanupWriteResult,
+    refreshed: bool,
+    clear_all: bool = False,
+    track: LocalTrack | None = None,
+    path: str | None = None,
+) -> dict[str, object]:
+    track_path = str(track.path) if track is not None else str(path or "")
+    label = (
+        f"{track.display_artist} - {track.display_title}"
+        if track is not None
+        else Path(track_path).stem
+    )
+    return {
+        "path": track_path,
+        "label": label,
+        "cleaned": result.cleaned,
+        "clear_all": clear_all,
+        "refreshed": refreshed,
+        "before_comment": result.before_comment,
+        "after_comment": result.after_comment,
+    }
+
+
+def _comment_cleanup_snapshot(
+    state: CommentCleanupState,
 ) -> dict[str, object]:
     with state.lock:
         return {
             "running": state.running,
             "total": state.total,
             "processed": state.processed,
-            "tagged": state.tagged,
+            "cleaned": state.cleaned,
             "skipped": state.skipped,
             "failed": state.failed,
             "current": state.current,
+            "last_result": state.last_result,
             "started_at": state.started_at,
             "finished_at": state.finished_at,
         }
@@ -1643,7 +1813,7 @@ def _render_index(
     music_dirs: list[str],
     *,
     auto_artwork_status: dict[str, object] | None = None,
-    volume_normalization_status: dict[str, object] | None = None,
+    comment_cleanup_status: dict[str, object] | None = None,
 ) -> str:
     rows = "\n".join(_render_track_row(track, view) for track in view.tracks)
     empty = ""
@@ -1860,6 +2030,38 @@ def _render_index(
       font-size: 13px;
       font-weight: 700;
       text-decoration: none;
+    }}
+    .comment-cell {{
+      display: grid;
+      gap: 4px;
+      align-items: start;
+      justify-items: start;
+      min-width: 0;
+      white-space: normal;
+    }}
+    .comment-cell form {{
+      margin: 0;
+    }}
+    .comment-actions {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+    }}
+    .comment-preview {{
+      max-width: 100%;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .comment-preview.muted {{
+      color: var(--muted);
+    }}
+    .status-result {{
+      display: inline;
     }}
     dialog {{
       width: min(860px, calc(100vw - 32px));
@@ -2083,11 +2285,11 @@ def _render_index(
       .link-layout, .candidate {{
         grid-template-columns: 1fr;
       }}
-      th:nth-child(4), td:nth-child(4),
       th:nth-child(5), td:nth-child(5),
-      th:nth-child(7), td:nth-child(7),
-      th:nth-child(9), td:nth-child(9),
-      th:nth-child(11), td:nth-child(11) {{
+      th:nth-child(6), td:nth-child(6),
+      th:nth-child(8), td:nth-child(8),
+      th:nth-child(10), td:nth-child(10),
+      th:nth-child(12), td:nth-child(12) {{
         display: none;
       }}
       th, td {{
@@ -2109,7 +2311,7 @@ def _render_index(
   <main class="wrap">
     {_render_controls(view)}
     {_render_auto_artwork_status(auto_artwork_status)}
-    {_render_volume_normalization_status(volume_normalization_status)}
+    {_render_comment_cleanup_status(comment_cleanup_status)}
     <div class="viewbar">
       <span>Showing {showing_start}-{showing_end} of {view.filtered_count} matching tracks</span>
       {_render_pagination(view)}
@@ -2118,9 +2320,13 @@ def _render_index(
           <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
           <button type="submit">Run Spotify sweep</button>
         </form>
-        <form method="post" action="/volume-normalization">
+        <form method="post" action="/comment-cleanup">
           <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
-          <button type="submit">Run volume tag sweep</button>
+          <button type="submit">Clean comments sweep</button>
+        </form>
+        <form method="post" action="/comment-clear">
+          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
+          <button type="submit">Clear comments sweep</button>
         </form>
         <form method="post" action="/reindex">
           <button type="submit">Refresh index</button>
@@ -2132,16 +2338,16 @@ def _render_index(
       <thead>
         <tr>
           <th class="cover-cell"></th>
-          <th style="width: 18%">{_sort_link(view, "title")}</th>
-          <th style="width: 11%">{_sort_link(view, "artist")}</th>
-          <th style="width: 12%">{_sort_link(view, "album")}</th>
+          <th style="width: 16%">{_sort_link(view, "title")}</th>
+          <th style="width: 118px">Comment</th>
+          <th style="width: 10%">{_sort_link(view, "artist")}</th>
+          <th style="width: 10%">{_sort_link(view, "album")}</th>
           <th style="width: 7%">{_sort_link(view, "genre")}</th>
           <th style="width: 7%">{_sort_link(view, "release_date")}</th>
           <th style="width: 7%">{_sort_link(view, "file_created_at")}</th>
           <th style="width: 6%">{_sort_link(view, "format")}</th>
           <th style="width: 7%">{_sort_link(view, "bitrate")}</th>
           <th style="width: 6%">{_sort_link(view, "duration")}</th>
-          <th style="width: 74px">Volume</th>
           <th class="spotify-cell">Source</th>
         </tr>
       </thead>
@@ -2245,8 +2451,8 @@ def _render_index(
         }}
       }}
 
-      function renderVolumeNormalizationStatus(status) {{
-        const node = document.getElementById("volume-normalization-status");
+      function renderCommentCleanupStatus(status) {{
+        const node = document.getElementById("comment-cleanup-status");
         if (!node) return;
         if (!status.running && Number(status.total || 0) === 0) {{
           node.hidden = true;
@@ -2256,36 +2462,56 @@ def _render_index(
         node.hidden = false;
         const total = Number(status.total || 0);
         const processed = Number(status.processed || 0);
-        const tagged = Number(status.tagged || 0);
+        const cleaned = Number(status.cleaned || 0);
         const skipped = Number(status.skipped || 0);
         const failed = Number(status.failed || 0);
-        const escapeHtml = (value) => value
+        const escapeHtml = (value) => String(value)
           .replaceAll("&", "&amp;")
           .replaceAll("<", "&lt;")
           .replaceAll(">", "&gt;")
           .replaceAll('"', "&quot;")
           .replaceAll("'", "&#x27;");
+        const renderResult = (result) => {{
+          if (!result) return "";
+          const label = escapeHtml(result.label || "");
+          if (!result.cleaned) {{
+            return ` · <span class="status-result">${{label}}: unchanged</span>`;
+          }}
+          const before = escapeHtml(result.before_comment || "empty");
+          const after = escapeHtml(result.after_comment || "empty");
+          if (result.clear_all || !result.after_comment) {{
+            return ` · <span class="status-result">${{label}}: removed comment (was ${{before}})</span>`;
+          }}
+          return ` · <span class="status-result">${{label}}: kept <strong>${{after}}</strong> (was ${{before}})</span>`;
+        }};
         const current = status.current ? ` · Current: <strong>${{escapeHtml(status.current)}}</strong>` : "";
+        const result = renderResult(status.last_result);
         if (status.running) {{
-          node.innerHTML = `<strong>Volume tag sweep running</strong> · ${{processed}}/${{total}} processed · ${{tagged}} tagged · ${{skipped}} skipped · ${{failed}} failed${{current}}`;
+          node.innerHTML = `<strong>Comment cleanup sweep running</strong> · ${{processed}}/${{total}} processed · ${{cleaned}} cleaned · ${{skipped}} skipped · ${{failed}} failed${{current}}${{result}}`;
           return;
         }}
-        node.innerHTML = `<strong>Volume tag sweep complete</strong> · ${{processed}}/${{total}} processed · ${{tagged}} tagged · ${{skipped}} skipped · ${{failed}} failed`;
+        node.innerHTML = `<strong>Comment cleanup sweep complete</strong> · ${{processed}}/${{total}} processed · ${{cleaned}} cleaned · ${{skipped}} skipped · ${{failed}} failed${{result}}`;
       }}
 
-      async function pollVolumeNormalizationStatus() {{
-        const node = document.getElementById("volume-normalization-status");
+      async function pollCommentCleanupStatus() {{
+        const node = document.getElementById("comment-cleanup-status");
         if (!node || node.hidden) return;
-        const response = await fetch("/api/volume-normalization");
+        const response = await fetch("/api/comment-cleanup");
         const status = await response.json();
-        renderVolumeNormalizationStatus(status);
+        renderCommentCleanupStatus(status);
         if (status.running) {{
-          window.setTimeout(pollVolumeNormalizationStatus, 2500);
+          window.setTimeout(pollCommentCleanupStatus, 2500);
+        }} else if (Number(status.cleaned || 0) > 0 && pageParams.get("comment_refresh") !== "1") {{
+          const url = new URL(window.location.href);
+          url.searchParams.set("comment_refresh", "1");
+          window.setTimeout(() => {{
+            window.location.href = url.toString();
+          }}, 250);
         }}
       }}
 
       pollAutoArtworkStatus();
-      pollVolumeNormalizationStatus();
+      pollCommentCleanupStatus();
 
       document.addEventListener("click", (event) => {{
         const opener = event.target.closest("[data-spotify-modal-url]");
@@ -2343,44 +2569,67 @@ def _render_auto_artwork_status(status: dict[str, object] | None) -> str:
     return f'<div id="auto-artwork-status" class="auto-artwork" {hidden}>{text}</div>'
 
 
-def _render_volume_normalization_status(status: dict[str, object] | None) -> str:
+def _render_comment_cleanup_status(status: dict[str, object] | None) -> str:
     if not status:
-        return (
-            '<div id="volume-normalization-status" class="auto-artwork" hidden></div>'
-        )
+        return '<div id="comment-cleanup-status" class="auto-artwork" hidden></div>'
 
     running = bool(status.get("running"))
     total = _status_int(status.get("total"))
     processed = _status_int(status.get("processed"))
-    tagged = _status_int(status.get("tagged"))
+    cleaned = _status_int(status.get("cleaned"))
     skipped = _status_int(status.get("skipped"))
     failed = _status_int(status.get("failed"))
     current = status.get("current")
+    result = status.get("last_result")
     hidden = "hidden" if not running and total == 0 else ""
+    result_html = (
+        _render_comment_cleanup_result(status=cast(dict[str, object], result))
+        if isinstance(result, dict)
+        else ""
+    )
     if running:
         current_html = (
             f" · Current: <strong>{escape(str(current))}</strong>" if current else ""
         )
         text = (
-            "<strong>Volume tag sweep running</strong>"
+            "<strong>Comment cleanup sweep running</strong>"
             f" · {processed}/{total} processed"
-            f" · {tagged} tagged"
+            f" · {cleaned} cleaned"
             f" · {skipped} skipped"
             f" · {failed} failed"
             f"{current_html}"
+            f"{result_html}"
         )
     else:
         text = (
-            "<strong>Volume tag sweep complete</strong>"
+            "<strong>Comment cleanup sweep complete</strong>"
             f" · {processed}/{total} processed"
-            f" · {tagged} tagged"
+            f" · {cleaned} cleaned"
             f" · {skipped} skipped"
             f" · {failed} failed"
+            f"{result_html}"
         )
 
     return (
-        f'<div id="volume-normalization-status" class="auto-artwork" '
-        f"{hidden}>{text}</div>"
+        f'<div id="comment-cleanup-status" class="auto-artwork" {hidden}>{text}</div>'
+    )
+
+
+def _render_comment_cleanup_result(*, status: dict[str, object]) -> str:
+    label = escape(str(status.get("label") or ""))
+    before = str(status.get("before_comment") or "empty")
+    after = str(status.get("after_comment") or "empty")
+    if not bool(status.get("cleaned")):
+        return f' · <span class="status-result">{label}: unchanged</span>'
+    if bool(status.get("clear_all")) or not status.get("after_comment"):
+        return (
+            f' · <span class="status-result">{label}: '
+            f"removed comment (was {escape(before)})</span>"
+        )
+    return (
+        f' · <span class="status-result">{label}: '
+        f"kept <strong>{escape(after)}</strong> "
+        f"(was {escape(before)})</span>"
     )
 
 
@@ -2394,11 +2643,6 @@ def _render_controls(view: CollectionView) -> str:
         f'<option value="{escape(audio_format)}" {_selected(view.query.audio_format, audio_format)}>'
         f"{escape(audio_format)}</option>"
         for audio_format in view.formats
-    )
-    metadata_options = "\n".join(
-        f'<option value="{escape(key)}" {_selected(view.query.metadata, key)}>'
-        f"{escape(label)}</option>"
-        for key, label in METADATA_FILTER_LABELS.items()
     )
     spotify_options = "\n".join(
         f'<option value="{escape(key)}" {_selected(view.query.spotify, key)}>'
@@ -2414,12 +2658,6 @@ def _render_controls(view: CollectionView) -> str:
     Format
     <select name="format">
       {"".join(format_options)}
-    </select>
-  </label>
-  <label>
-    Tags
-    <select name="metadata">
-      {metadata_options}
     </select>
   </label>
   <label>
@@ -2893,12 +3131,14 @@ def _selected(current: object, value: object) -> str:
 def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
     spotify_action = _render_spotify_action(track, return_to=_url_for(view))
     comment_attr = f' title="{escape(track.comment)}"' if track.comment else ""
+    return_to = _url_for(view)
     return f"""<tr{comment_attr}>
   <td class="cover-cell">{_render_cover(track)}</td>
   <td>
     <div class="track-title">{escape(track.display_title)}</div>
     <div class="path">{escape(_short_path(track.path))}</div>
   </td>
+  <td>{_render_comment_track_action(track, return_to=return_to)}</td>
   <td>{escape(track.display_artist)}</td>
   <td>{escape(track.album or "")}</td>
   <td>{escape(track.genre or "")}</td>
@@ -2907,17 +3147,28 @@ def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
   <td><span class="pill">{escape(track.audio_format or "?")}</span></td>
   <td>{escape(_format_bitrate(track.bitrate))}</td>
   <td>{escape(_format_duration(track.duration_seconds))}</td>
-  <td>{_render_volume_track_action(track, return_to=_url_for(view))}</td>
   <td class="spotify-cell">{spotify_action}</td>
 </tr>"""
 
 
-def _render_volume_track_action(track: LocalTrack, *, return_to: str) -> str:
-    return f"""<form method="post" action="/volume-normalization/track">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    <button class="spotify-action" type="submit">Tag</button>
-  </form>"""
+def _render_comment_track_action(track: LocalTrack, *, return_to: str) -> str:
+    state_class = "comment-preview" if track.comment else "comment-preview muted"
+    preview = track.comment or "none"
+    return f"""<div class="comment-cell">
+  <div class="{state_class}">{escape(preview)}</div>
+  <div class="comment-actions">
+    <form method="post" action="/comment-cleanup/track">
+      <input type="hidden" name="path" value="{escape(str(track.path))}">
+      <input type="hidden" name="return_to" value="{escape(return_to)}">
+      <button class="spotify-action" type="submit">Clean</button>
+    </form>
+    <form method="post" action="/comment-clear/track">
+      <input type="hidden" name="path" value="{escape(str(track.path))}">
+      <input type="hidden" name="return_to" value="{escape(return_to)}">
+      <button class="spotify-action" type="submit">Clear</button>
+    </form>
+  </div>
+</div>"""
 
 
 def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:

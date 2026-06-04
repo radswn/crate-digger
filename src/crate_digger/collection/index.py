@@ -229,7 +229,7 @@ def list_tracks_pending_spotify_linking(
     return [_track_from_row(row) for row in rows]
 
 
-def list_tracks_for_volume_normalization(
+def list_tracks_for_comment_cleanup(
     db_path: Path = DEFAULT_COLLECTION_DB_PATH,
 ) -> list[LocalTrack]:
     with sqlite3.connect(db_path) as conn:

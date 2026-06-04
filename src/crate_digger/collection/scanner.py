@@ -11,6 +11,7 @@ from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.wave import WAVE
 
+from crate_digger.collection.comments import read_comment
 from crate_digger.collection.models import LocalTrack
 
 
@@ -84,7 +85,8 @@ def read_track_metadata(path: Path) -> LocalTrack:
         title=_first_tag(audio.tags, "title"),
         artist=_first_tag(audio.tags, "artist", "albumartist"),
         album=_first_tag(audio.tags, "album"),
-        comment=_first_tag(audio.tags, "comment", "comments", "description"),
+        comment=read_comment(path)
+        or _first_tag(audio.tags, "comment", "comments", "description"),
         genre=_first_tag(audio.tags, "genre"),
         release_date=_first_tag(
             audio.tags,

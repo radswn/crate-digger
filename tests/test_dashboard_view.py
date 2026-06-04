@@ -8,20 +8,22 @@ from fastapi.testclient import TestClient
 
 from crate_digger.collection.index import _ensure_schema
 from crate_digger.collection.models import LocalTrack
+from crate_digger.collection.comments import CommentCleanupWriteResult
 from crate_digger.web.app import (
     AutoArtworkRefreshState,
+    CommentCleanupState,
     CollectionQuery,
     CollectionView,
     SpotifyFilter,
     SpotifyCandidate,
-    VolumeNormalizationState,
     _auto_artwork_refresh_snapshot,
     _auto_refresh_spotify_artwork,
     _build_collection_view,
+    _cleanup_comment_metadata,
+    _cleanup_single_track_comment_metadata,
+    _comment_cleanup_snapshot,
     create_app,
     _download_spotify_artwork,
-    _normalize_single_track_volume_metadata,
-    _normalize_volume_metadata,
     _replace_track_artwork_from_url,
     _render_track_row,
     _render_spotify_candidate,
@@ -32,7 +34,6 @@ from crate_digger.web.app import (
     _soundcloud_artwork_url_for_track_url,
     _soundcloud_url_from_input,
     _spotify_uri_from_input,
-    _volume_normalization_snapshot,
     _with_art_refresh,
 )
 
@@ -92,6 +93,19 @@ def seed_track(
                 spotify_link_skipped_at,
             ),
         )
+
+
+def comment_cleanup_result(
+    *,
+    cleaned: bool = True,
+    before_comment: str | None = "promo 6A /* Tech / House / master */",
+    after_comment: str | None = "/* Tech / House / master */",
+) -> CommentCleanupWriteResult:
+    return CommentCleanupWriteResult(
+        cleaned=cleaned,
+        before_comment=before_comment,
+        after_comment=after_comment,
+    )
 
 
 def test_collection_view_searches_across_track_fields(tmp_path):
@@ -295,8 +309,11 @@ def test_spotify_link_actions_preserve_return_to():
     assert 'name="image_url" value="https://i.scdn.co/image/manual-cover"' in candidate
 
 
-def test_track_row_includes_single_track_volume_button():
-    track = seedless_track("/music/unlinked.mp3")
+def test_track_row_includes_single_track_action_buttons():
+    track = seedless_track(
+        "/music/unlinked.mp3",
+        comment="promo 6A /* Tech / House / master */",
+    )
     view = _collection_view_for_tracks(
         [track],
         q="night",
@@ -307,13 +324,15 @@ def test_track_row_includes_single_track_volume_button():
     row = _render_track_row(track, view)
 
     assert "<th" not in row
-    assert 'action="/volume-normalization/track"' in row
+    assert 'action="/comment-cleanup/track"' in row
+    assert 'action="/comment-clear/track"' in row
     assert 'name="path" value="/music/unlinked.mp3"' in row
     assert 'name="return_to"' in row
     assert "q=night" in row
     assert "spotify=unlinked" in row
     assert "page=2" in row
-    assert ">Tag</button>" in row
+    assert ">Clean</button>" in row
+    assert ">Clear</button>" in row
 
 
 def test_linked_spotify_action_keeps_manual_find_available():
@@ -451,14 +470,14 @@ music-dirs = []
         encoding="utf-8",
     )
     spotify_calls = []
-    volume_calls = []
+    comment_calls = []
 
     def fake_start_auto_artwork_refresh(**kwargs):
         spotify_calls.append(kwargs)
         return True
 
-    def fake_start_volume_normalization(**kwargs):
-        volume_calls.append(kwargs)
+    def fake_start_comment_cleanup(**kwargs):
+        comment_calls.append(kwargs)
         return True
 
     monkeypatch.setattr(
@@ -466,8 +485,8 @@ music-dirs = []
         fake_start_auto_artwork_refresh,
     )
     monkeypatch.setattr(
-        "crate_digger.web.app._start_volume_normalization",
-        fake_start_volume_normalization,
+        "crate_digger.web.app._start_comment_cleanup",
+        fake_start_comment_cleanup,
     )
 
     with TestClient(
@@ -479,7 +498,7 @@ music-dirs = []
 
     assert response.status_code == 200
     assert spotify_calls == []
-    assert volume_calls == []
+    assert comment_calls == []
 
 
 def test_spotify_sweep_button_starts_refresh(tmp_path, monkeypatch):
@@ -527,7 +546,7 @@ music-dirs = []
     assert calls == [(str(config_path), str(db_path), False)]
 
 
-def test_volume_normalization_button_starts_sweep(tmp_path, monkeypatch):
+def test_comment_cleanup_button_starts_sweep(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text(
         """
@@ -547,22 +566,22 @@ music-dirs = []
     db_path = tmp_path / "collection.sqlite3"
     calls = []
 
-    def fake_start_volume_normalization(*, db_path, state):
+    def fake_start_comment_cleanup(*, db_path, state):
         calls.append((str(db_path), state.running))
         return True
 
     monkeypatch.setattr(
-        "crate_digger.web.app._start_volume_normalization",
-        fake_start_volume_normalization,
+        "crate_digger.web.app._start_comment_cleanup",
+        fake_start_comment_cleanup,
     )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     page = client.get("/")
-    assert 'action="/volume-normalization"' in page.text
-    assert ">Run volume tag sweep</button>" in page.text
+    assert 'action="/comment-cleanup"' in page.text
+    assert ">Clean comments sweep</button>" in page.text
 
     response = client.post(
-        "/volume-normalization",
+        "/comment-cleanup",
         data={"return_to": "/?format=MP3&page=2"},
         follow_redirects=False,
     )
@@ -572,7 +591,52 @@ music-dirs = []
     assert calls == [(str(db_path), False)]
 
 
-def test_single_track_volume_normalization_button_starts_track_job(
+def test_comment_clear_button_starts_sweep(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    calls = []
+
+    def fake_start_comment_clear(*, db_path, state):
+        calls.append((str(db_path), state.running))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_comment_clear",
+        fake_start_comment_clear,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    page = client.get("/")
+    assert 'action="/comment-clear"' in page.text
+    assert ">Clear comments sweep</button>" in page.text
+
+    response = client.post(
+        "/comment-clear",
+        data={"return_to": "/?format=MP3&page=2"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?format=MP3&page=2"
+    assert calls == [(str(db_path), False)]
+
+
+def test_single_track_comment_cleanup_button_starts_track_job(
     tmp_path,
     monkeypatch,
 ):
@@ -595,18 +659,65 @@ music-dirs = []
     db_path = tmp_path / "collection.sqlite3"
     calls = []
 
-    def fake_start_single_track_volume_normalization(*, db_path, path, state):
+    def fake_start_single_track_comment_cleanup(*, db_path, path, state):
         calls.append((str(db_path), path, state.running))
         return True
 
     monkeypatch.setattr(
-        "crate_digger.web.app._start_single_track_volume_normalization",
-        fake_start_single_track_volume_normalization,
+        "crate_digger.web.app._start_single_track_comment_cleanup",
+        fake_start_single_track_comment_cleanup,
     )
     client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
 
     response = client.post(
-        "/volume-normalization/track",
+        "/comment-cleanup/track",
+        data={
+            "path": "/music/test.mp3",
+            "return_to": "/?q=test&page=2",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/?q=test&page=2"
+    assert calls == [(str(db_path), "/music/test.mp3", False)]
+
+
+def test_single_track_comment_clear_button_starts_track_job(
+    tmp_path,
+    monkeypatch,
+):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """
+[spotify]
+to-listen-playlist = "listen"
+test-playlist = "test"
+followed-labels-playlist = "labels"
+to-download-playlist = "download"
+acapella-playlist = "acapella"
+scopes = []
+
+[collection]
+music-dirs = []
+""",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "collection.sqlite3"
+    calls = []
+
+    def fake_start_single_track_comment_clear(*, db_path, path, state):
+        calls.append((str(db_path), path, state.running))
+        return True
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._start_single_track_comment_clear",
+        fake_start_single_track_comment_clear,
+    )
+    client = TestClient(create_app(config_path=str(config_path), db_path=db_path))
+
+    response = client.post(
+        "/comment-clear/track",
         data={
             "path": "/music/test.mp3",
             "return_to": "/?q=test&page=2",
@@ -1324,47 +1435,57 @@ def test_auto_refresh_spotify_artwork_updates_linked_blank_tracks(
     assert snapshot["failed"] == 0
 
 
-def test_volume_normalization_tags_tracks_and_refreshes_index(tmp_path, monkeypatch):
-    state = VolumeNormalizationState()
+def test_comment_cleanup_cleans_tracks_and_refreshes_index(tmp_path, monkeypatch):
+    state = CommentCleanupState()
     db_path = tmp_path / "collection.sqlite3"
-    tagged_track = seedless_track("/music/tagged.mp3")
+    cleaned_track = seedless_track("/music/cleaned.mp3")
     skipped_track = seedless_track("/music/skipped.mp3")
-    tagged = []
+    cleaned = []
     refreshed = []
 
     monkeypatch.setattr(
-        "crate_digger.web.app.list_tracks_for_volume_normalization",
-        lambda _db_path: [tagged_track, skipped_track],
+        "crate_digger.web.app.list_tracks_for_comment_cleanup",
+        lambda _db_path: [cleaned_track, skipped_track],
     )
     monkeypatch.setattr(
         "crate_digger.web.app._track_file_exists",
         lambda _db_path, *, path: True,
     )
     monkeypatch.setattr(
-        "crate_digger.web.app.write_volume_normalization_tags",
-        lambda path: tagged.append(str(path)) or str(path).endswith("tagged.mp3"),
+        "crate_digger.web.app.write_rekordbox_comment_tags_only",
+        lambda path: cleaned.append(str(path))
+        or comment_cleanup_result(cleaned=str(path).endswith("cleaned.mp3")),
     )
     monkeypatch.setattr(
         "crate_digger.web.app.refresh_track_metadata",
         lambda db_path, *, path: refreshed.append((str(db_path), path)) or True,
     )
 
-    _normalize_volume_metadata(db_path=db_path, state=state)
-    snapshot = _volume_normalization_snapshot(state)
+    _cleanup_comment_metadata(db_path=db_path, state=state)
+    snapshot = _comment_cleanup_snapshot(state)
 
-    assert tagged == ["/music/tagged.mp3", "/music/skipped.mp3"]
-    assert refreshed == [(str(db_path), "/music/tagged.mp3")]
+    assert cleaned == ["/music/cleaned.mp3", "/music/skipped.mp3"]
+    assert refreshed == [(str(db_path), "/music/cleaned.mp3")]
     assert snapshot["total"] == 2
     assert snapshot["processed"] == 2
-    assert snapshot["tagged"] == 1
+    assert snapshot["cleaned"] == 1
     assert snapshot["skipped"] == 1
     assert snapshot["failed"] == 0
+    assert snapshot["last_result"] == {
+        "path": "/music/skipped.mp3",
+        "label": "Ada - Night Track",
+        "cleaned": False,
+        "clear_all": False,
+        "refreshed": False,
+        "before_comment": "promo 6A /* Tech / House / master */",
+        "after_comment": "/* Tech / House / master */",
+    }
 
 
-def test_single_track_volume_normalization_tags_one_track(tmp_path, monkeypatch):
-    state = VolumeNormalizationState()
+def test_single_track_comment_cleanup_cleans_one_track(tmp_path, monkeypatch):
+    state = CommentCleanupState()
     db_path = tmp_path / "collection.sqlite3"
-    tagged = []
+    cleaned = []
     refreshed = []
 
     monkeypatch.setattr(
@@ -1372,59 +1493,108 @@ def test_single_track_volume_normalization_tags_one_track(tmp_path, monkeypatch)
         lambda _db_path, *, path: True,
     )
     monkeypatch.setattr(
-        "crate_digger.web.app.write_volume_normalization_tags",
-        lambda path: tagged.append(str(path)) or True,
+        "crate_digger.web.app.write_rekordbox_comment_tags_only",
+        lambda path: cleaned.append(str(path)) or comment_cleanup_result(),
     )
     monkeypatch.setattr(
         "crate_digger.web.app.refresh_track_metadata",
         lambda db_path, *, path: refreshed.append((str(db_path), path)) or True,
     )
 
-    _normalize_single_track_volume_metadata(
+    _cleanup_single_track_comment_metadata(
         db_path=db_path,
         path="/music/one.mp3",
         state=state,
     )
-    snapshot = _volume_normalization_snapshot(state)
+    snapshot = _comment_cleanup_snapshot(state)
 
-    assert tagged == ["/music/one.mp3"]
+    assert cleaned == ["/music/one.mp3"]
     assert refreshed == [(str(db_path), "/music/one.mp3")]
     assert snapshot["total"] == 1
     assert snapshot["processed"] == 1
-    assert snapshot["tagged"] == 1
+    assert snapshot["cleaned"] == 1
     assert snapshot["skipped"] == 0
     assert snapshot["failed"] == 0
+    assert snapshot["last_result"] == {
+        "path": "/music/one.mp3",
+        "label": "one",
+        "cleaned": True,
+        "clear_all": False,
+        "refreshed": True,
+        "before_comment": "promo 6A /* Tech / House / master */",
+        "after_comment": "/* Tech / House / master */",
+    }
 
 
-def test_single_track_volume_normalization_prunes_deleted_track(
-    tmp_path,
-    monkeypatch,
-):
-    state = VolumeNormalizationState()
+def test_single_track_comment_clear_removes_one_track(tmp_path, monkeypatch):
+    state = CommentCleanupState()
+    db_path = tmp_path / "collection.sqlite3"
+    cleared = []
+    refreshed = []
+
+    monkeypatch.setattr(
+        "crate_digger.web.app._track_file_exists",
+        lambda _db_path, *, path: True,
+    )
+    monkeypatch.setattr(
+        "crate_digger.web.app.refresh_track_metadata",
+        lambda db_path, *, path: refreshed.append((str(db_path), path)) or True,
+    )
+
+    _cleanup_single_track_comment_metadata(
+        db_path=db_path,
+        path="/music/one.mp3",
+        state=state,
+        writer=lambda path: cleared.append(str(path))
+        or comment_cleanup_result(after_comment=None),
+        clear_all=True,
+    )
+    snapshot = _comment_cleanup_snapshot(state)
+
+    assert cleared == ["/music/one.mp3"]
+    assert refreshed == [(str(db_path), "/music/one.mp3")]
+    assert snapshot["total"] == 1
+    assert snapshot["processed"] == 1
+    assert snapshot["cleaned"] == 1
+    assert snapshot["skipped"] == 0
+    assert snapshot["failed"] == 0
+    assert snapshot["last_result"] == {
+        "path": "/music/one.mp3",
+        "label": "one",
+        "cleaned": True,
+        "clear_all": True,
+        "refreshed": True,
+        "before_comment": "promo 6A /* Tech / House / master */",
+        "after_comment": None,
+    }
+
+
+def test_single_track_comment_cleanup_prunes_deleted_track(tmp_path, monkeypatch):
+    state = CommentCleanupState()
     db_path = tmp_path / "collection.sqlite3"
 
-    def fail_write_volume_normalization_tags(_path):
-        raise AssertionError("deleted tracks must not be tagged")
+    def fail_write_comment_cleanup(_path):
+        raise AssertionError("deleted tracks must not be cleaned")
 
     monkeypatch.setattr(
         "crate_digger.web.app._track_file_exists",
         lambda _db_path, *, path: False,
     )
     monkeypatch.setattr(
-        "crate_digger.web.app.write_volume_normalization_tags",
-        fail_write_volume_normalization_tags,
+        "crate_digger.web.app.write_rekordbox_comment_tags_only",
+        fail_write_comment_cleanup,
     )
 
-    _normalize_single_track_volume_metadata(
+    _cleanup_single_track_comment_metadata(
         db_path=db_path,
         path="/music/deleted.mp3",
         state=state,
     )
-    snapshot = _volume_normalization_snapshot(state)
+    snapshot = _comment_cleanup_snapshot(state)
 
     assert snapshot["total"] == 1
     assert snapshot["processed"] == 1
-    assert snapshot["tagged"] == 0
+    assert snapshot["cleaned"] == 0
     assert snapshot["skipped"] == 1
     assert snapshot["failed"] == 0
 
@@ -2083,6 +2253,7 @@ def test_search_spotify_candidates_prefers_medium_sized_cover():
 def seedless_track(
     path: str,
     *,
+    comment: str | None = None,
     spotify_uri: str | None = None,
     soundcloud_url: str | None = None,
     spotify_link_skipped_at: str | None = None,
@@ -2092,6 +2263,7 @@ def seedless_track(
         title="Night Track",
         artist="Ada",
         album="Album",
+        comment=comment,
         duration_seconds=None,
         bitrate=None,
         audio_format="MP3",

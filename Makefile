@@ -11,7 +11,7 @@ ACAPELLA_OUTPUT ?= acapella.txt
 DASHBOARD_HOST ?= 127.0.0.1
 DASHBOARD_PORT ?= 8765
 
-.PHONY: help install test lint typecheck check dashboard fetch-new-releases backfill-label-history export-to-download-playlist wishlist-to-txt export-acapella-playlist acapella-to-txt
+.PHONY: help install test lint typecheck check dashboard fetch-new-releases backfill-label-history export-to-download-playlist wishlist-to-txt export-acapella-playlist acapella-to-txt ensure-title-suffixes apply-title-suffixes
 
 help:
 	@printf "Available targets:\n"
@@ -27,6 +27,8 @@ help:
 	@printf "  make wishlist-to-txt                  Export to wishlist.txt\n"
 	@printf "  make export-acapella-playlist         Export acapella playlist to ACAPELLA_OUTPUT\n"
 	@printf "  make acapella-to-txt                  Export acapella playlist to acapella.txt\n"
+	@printf "  make ensure-title-suffixes            Dry-run instrumental/acapella title suffix fixes\n"
+	@printf "  make apply-title-suffixes             Write instrumental/acapella title suffix fixes\n"
 	@printf "\nVariables:\n"
 	@printf "  OUTPUT=path                          Default: to-download.txt\n"
 	@printf "  ACAPELLA_OUTPUT=path                 Default: acapella.txt\n"
@@ -70,3 +72,9 @@ export-acapella-playlist:
 	$(PYTHON) -m crate_digger.main.export_playlist acapella "$(ACAPELLA_OUTPUT)"
 
 acapella-to-txt: export-acapella-playlist
+
+ensure-title-suffixes:
+	$(PYTHON) -m crate_digger.main.ensure_title_suffixes
+
+apply-title-suffixes:
+	$(PYTHON) -m crate_digger.main.ensure_title_suffixes --apply
