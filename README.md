@@ -102,7 +102,7 @@ SPOTIPY_REDIRECT_URI=http://localhost:8888/callback
 
 On first run, the app opens a browser for OAuth login and caches the token locally (`.spotipy_cache/`).
 
-> Note on WSL: the browser window may not open automatically - setting $BROWSER to "wslview" fixes that
+> Note on WSL: the browser window may not open automatically - setting $BROWSER to "wslview" fixes it
 
 
 ### 4. Telegram Setup
