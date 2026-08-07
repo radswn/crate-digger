@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DJ_PLAYLISTS Version="1.0.0">
+  <COLLECTION Entries="3">
+    <TRACK TrackID="101" Name="Night Drive" Artist="Ada" Genre="Techno"
+      Location="file://localhost/C:/Music/Night%20Drive.mp3"
+      Comments="promo /* Tech / Groovy / Strange Tag */" Rating="4" />
+    <TRACK TrackID="102" Name="Zażółć" Artist="Łukasz"
+      Location="file://localhost/mnt/music/Za%C5%BC%C3%B3%C5%82%C4%87.flac"
+      Rating="not-a-rating" />
+    <TRACK TrackID="103" Name="Missing Location" Artist="Ada" />
+  </COLLECTION>
+</DJ_PLAYLISTS>

@@ -32,6 +32,8 @@ def test_load_config_valid(tmp_path):
     assert cfg["spotify"]["acapella_playlist"] == "pl:acapella"
     assert cfg["spotify"]["scopes"] == ["a", "b"]
     assert cfg["collection"]["music_dirs"] == ["/music", "~/Downloads/tracks"]
+    assert cfg["discovery"]["freshness_days"] == 90
+    assert cfg["discovery"]["label_aliases"] == {}
 
 
 def test_load_config_defaults_collection(tmp_path):
@@ -52,6 +54,34 @@ def test_load_config_defaults_collection(tmp_path):
     cfg = load_config(cfg_file)
 
     assert cfg["collection"]["music_dirs"] == []
+
+
+def test_load_config_reads_discovery_settings(tmp_path):
+    config_text = textwrap.dedent(
+        """
+        [spotify]
+        to-listen-playlist = "pl:1"
+        test-playlist = "pl:test"
+        followed-labels-playlist = "pl:labels"
+        to-download-playlist = "pl:download"
+        acapella-playlist = "pl:acapella"
+        scopes = ["a"]
+
+        [discovery]
+        freshness-days = 60
+
+        [discovery.label-aliases]
+        "Hot-Creations" = "Hot Creations"
+        "ISSUES RECORDS" = "Issues"
+        """
+    )
+    cfg_file = tmp_path / "config.toml"
+    cfg_file.write_text(config_text)
+
+    cfg = load_config(cfg_file)
+
+    assert cfg["discovery"]["freshness_days"] == 60
+    assert cfg["discovery"]["label_aliases"]["ISSUES RECORDS"] == "Issues"
 
 
 def test_load_config_requires_sections(tmp_path):

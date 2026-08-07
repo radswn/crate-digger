@@ -43,6 +43,8 @@ from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.logging import get_logger
 from crate_digger.utils.spotify import get_spotify_client
+from crate_digger.web.profiles import create_profiles_router
+from crate_digger.web.discover import create_discover_router
 
 logger = get_logger(__name__)
 T = TypeVar("T")
@@ -179,6 +181,8 @@ def create_app(
         yield
 
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
+    app.include_router(create_profiles_router(db_path))
+    app.include_router(create_discover_router(db_path, config_path))
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -2303,6 +2307,8 @@ def _render_index(
     <div class="wrap topbar">
       <h1>Crate Digger</h1>
       <div class="summary">
+        <a href="/discover">Discover</a>
+        <a href="/profiles">Track Profiles</a>
         <div class="metric"><strong>{view.total_count}</strong>tracks</div>
         <div class="metric"><strong>{len(music_dirs)}</strong>folders</div>
       </div>

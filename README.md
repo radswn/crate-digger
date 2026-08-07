@@ -6,6 +6,7 @@ A Python application that discovers new music releases and automates Spotify pla
 - 🎵 Auto-fetch new releases weekly from labels represented in a Spotify playlist
 - 🎯 Intelligent deduplication and extended version filtering
 - 💿 Local collection dashboard for browsing downloaded audio files
+- 🎚️ Track Profiles for importing DJ-library metadata and rapidly reviewing tracks
 - 📱 Compact Telegram summaries for new releases and followed-label changes
 - 📚 Historical backfill when a new label is added to the followed playlist
 - 🔄 Cached authentication for seamless operation
@@ -193,6 +194,201 @@ make dashboard
 - Provides per-track Spotify linking actions that search the API only when opened
 - Exposes the same data as JSON at `/api/tracks`
 - Uses the `dashboard` dependency group, so `uv` installs the web dependencies on demand
+
+### Track Profiles
+
+Track Profiles add a local, structured review layer to the indexed collection. A profile
+can hold energy (1–5), a separate personal rating, set role, notes, and manual tags.
+Rekordbox and Traktor metadata are retained alongside that profile, with tags grouped by
+category and source.
+
+Imported stars are deliberately stored as source-specific `legacy_rating` values. Older
+stars may have meant energy, preference, set timing, or trust, so Track Profiles never
+equate them with energy or personal rating. Rekordbox and Traktor ratings are also kept
+separate when they differ.
+
+Install the editable project once to expose the CLI entry point:
+
+```bash
+uv sync
+uv pip install -e .
+```
+
+Import Rekordbox XML or Traktor NML into the existing collection database:
+
+```bash
+crate-digger library import-rekordbox collection.xml
+crate-digger library import-traktor collection.nml
+```
+
+Paths are decoded and conservatively matched to already indexed tracks. A repeatable path
+map handles collections created on another operating system. For example, from Windows to
+WSL:
+
+```bash
+crate-digger library import-rekordbox collection.xml \
+  --path-map 'D:\Music=/mnt/d/Music'
+```
+
+Preview matching without writing anything, or retain a detailed UTF-8 JSON diagnostic
+report:
+
+```bash
+crate-digger library import-traktor collection.nml --dry-run
+crate-digger library import-rekordbox collection.xml --report import-report.json
+```
+
+Use a different collection database with `--db-path PATH`. Inspect coverage after an
+import with:
+
+```bash
+crate-digger library status
+# or
+make library-status
+```
+
+Run `make dashboard`, then open <http://127.0.0.1:8765/profiles>. Review modes cover tracks
+missing energy, all tracks, imported tracks, and source conflicts. The page streams only
+indexed, existing local files and provides these keyboard shortcuts when focus is outside
+an input or audio control:
+
+- `1`–`5`: set energy
+- `G`, `R`, `T`, `H`, `D`, `M`: toggle Groovy, Rolling, Tech, House, Deep, Minimal
+- `S` or Enter: save and advance
+- Left/Right arrow: previous/next track
+
+For later offline classifier work, export deterministic UTF-8 CSV with one row per indexed
+track:
+
+```bash
+crate-digger library export-training-data track-profiles.csv
+```
+
+Multi-value tag columns use `|`; individual values are written as `category:value`.
+
+Current limitations: this version does not analyse audio automatically, train a model,
+edit Rekordbox XML, edit Traktor NML, or write tags back into audio files. It also never
+equates imported stars with energy. Import matching is intentionally conservative and
+does not use fuzzy matching; unmatched and ambiguous paths stay in the import report for
+manual diagnosis.
+
+### Taste-Aware Discovery Sessions
+
+Discovery converts the stored catalogue and existing Spotify playlists into small,
+explainable listening sessions. Spotify linkage identifies a recording; it is not itself
+evidence that the recording is liked. Automatically ingested and backfilled tracks remain
+neutral until another reliable signal exists.
+
+The existing catalogue is normalized into Spotify track, artist, release, and label
+relationships in the collection SQLite database. Releases preserve Spotify's raw label
+text while pointing to a conservative normalized label identity. Punctuation, case, and
+whitespace are normalized; substantially different names are merged only through explicit
+aliases:
+
+```toml
+[discovery]
+freshness-days = 90
+
+[discovery.label-aliases]
+"Issues Records" = "Issues"
+"HOT-CREATIONS" = "Hot Creations"
+```
+
+Schema initialization remains automatic—there is no separate migration tool. Run the
+idempotent catalogue index once, then rebuild taste whenever historical metadata changes:
+
+```bash
+uv run crate-digger discover index-existing
+uv run crate-digger discover rebuild-taste
+uv run crate-digger discover rebuild-taste --offline  # no Spotify enrichment
+```
+
+`index-existing` indexes Spotify-linked local files and relevant existing Spotify
+playlists. Numbered followed-label/backfill playlists are neutral catalogue reservoirs.
+The configured to-listen playlist is also neutral because the release pipeline populates
+it automatically. The to-download and acapella playlists are treated as deliberately
+curated positive evidence. Indexing never adds a track to a listening playlist or forces
+it into the next session.
+
+Taste evidence uses readable weights:
+
+| Signal | Weight | Interpretation |
+|---|---:|---|
+| Keep | +3.0 | Strong explicit positive decision |
+| Indexed local DJ-library file | +2.5 | Reliable ownership/use evidence |
+| Completed Track Profile | +2.0 | Energy, personal rating, and role all set |
+| Maybe | +1.5 | Medium positive decision |
+| Curated positive playlist | +1.25 | Deliberate playlist membership |
+| Historical stars | +0.1 to +1.25 | Weak-to-medium positive context |
+| Pass | −3.0 | Negative evidence for the exact track |
+| Unreviewed/backfilled | 0 | Neutral catalogue material |
+
+Historical stars remain source-specific legacy ratings. They never become Track Profile
+energy and low stars are not negative evidence. Existing approved tags contribute to tag
+affinity only through the positive or negative evidence of their tracks; they are not
+treated as strict genre truth.
+
+Artist, label, tag, and discovery-source affinities use a Beta-style prior:
+
+```text
+(weighted positive + 1) / (weighted positive + weighted negative + 2)
+```
+
+Every statistic includes reviewed sample size, neutral catalogue count, and confidence
+`sample / (sample + 5)`. Thus a single Keep can influence discovery without being
+presented as conclusive evidence about an entire label.
+
+Build and inspect sessions with:
+
+```bash
+uv run crate-digger discover taste-stats
+uv run crate-digger discover taste-stats --label "Issues"
+uv run crate-digger discover taste-stats --artist "Iglesias"
+
+uv run crate-digger discover build --mode balanced --size 30
+uv run crate-digger discover build --mode fresh --size 30
+uv run crate-digger discover build --mode deep-dig --label "Issues" --size 30
+uv run crate-digger discover build --mode frontier --size 25
+
+uv run crate-digger discover list
+uv run crate-digger discover show 1
+uv run crate-digger discover explain 1 3
+uv run crate-digger discover feedback 1 3 keep
+uv run crate-digger discover expand-release 1 3
+uv run crate-digger discover explore-label 1 3
+uv run crate-digger discover stats
+```
+
+Open <http://127.0.0.1:8765/discover> after `make dashboard` for the keyboard-driven
+review UI. Shortcuts are `K` Keep, `M` Maybe, `P` Pass, `S` Skip, `E` Expand release,
+`L` Explore label, and Space to play or pause an available local/Spotify preview.
+
+Session modes target these mixes:
+
+- `balanced`: 45% fresh, 30% taste-adjacent, 20% archive, 5% wildcard.
+- `fresh`: 70% fresh, 20% taste-adjacent, 5% archive, 5% wildcard.
+- `deep-dig`: 10% fresh, 30% taste-adjacent, 50% archive, 10% wildcard.
+- `frontier`: 15% fresh, 30% taste-adjacent, 25% archive, 30% wildcard.
+
+Quotas are targets. The builder fills shortages from other buckets, retains controlled
+novelty when eligible, limits artist/label/release repetition, avoids consecutive labels,
+and spreads archive selections across periods. Multi-track releases initially contribute
+one deterministic probe. Expand release makes only its remaining eligible tracks
+available. Explore label exposes at most one probe from each of five releases and never
+queues a complete label catalogue.
+
+Keep and Maybe increase future relevance; Pass excludes only that exact track; Skip keeps
+it eligible with presentation penalties. Scores, affinities, and human-readable reasons
+are copied into the session item, so old explanations do not change after later feedback.
+Track Profile classification remains separate: Keep does not infer energy, role, rating,
+or tags, and DJ-software/audio metadata is never modified. A kept Spotify candidate stays
+preserved in discovery; if that Spotify ID is later linked to an indexed local file, the
+local path is attached and the track enters the normal Track Profiles review workflow.
+
+Discovery is deterministic and heuristic-based. It does not use machine learning,
+embeddings, Spotify recommendations, related-artist crawling, Spotify audio features, or
+automatic genre/energy inference. Spotify session-playlist synchronization and Telegram
+session summaries are not implemented; SQLite remains the source of truth.
 
 ## Testing
 

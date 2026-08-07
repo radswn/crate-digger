@@ -21,9 +21,17 @@ class CollectionConfig(TypedDict):
     music_dirs: List[str]
 
 
+class DiscoveryConfig(TypedDict):
+    """Configuration for deterministic discovery heuristics."""
+
+    freshness_days: int
+    label_aliases: Dict[str, str]
+
+
 class AppConfig(TypedDict):
     spotify: SpotifyConfig
     collection: CollectionConfig
+    discovery: DiscoveryConfig
 
 
 def _require_keys(section: Dict, required: List[str], section_name: str) -> None:
@@ -139,7 +147,32 @@ def load_config(config_path: str = "config.toml") -> AppConfig:
         )
     }
 
-    return {"spotify": spotify_cfg, "collection": collection_cfg}
+    discovery_section = raw.get("discovery", {})
+    if not isinstance(discovery_section, dict):
+        raise ValueError("Expected [discovery] section to be a table")
+    freshness_days = discovery_section.get("freshness-days", 90)
+    if not isinstance(freshness_days, int) or isinstance(freshness_days, bool):
+        raise ValueError("Expected [discovery].freshness-days to be an integer")
+    if freshness_days < 1:
+        raise ValueError("Expected [discovery].freshness-days to be positive")
+    raw_aliases = discovery_section.get("label-aliases", {})
+    if not isinstance(raw_aliases, dict) or not all(
+        isinstance(key, str) and isinstance(value, str)
+        for key, value in raw_aliases.items()
+    ):
+        raise ValueError(
+            "Expected [discovery].label-aliases to be a string-to-string table"
+        )
+    discovery_cfg: DiscoveryConfig = {
+        "freshness_days": freshness_days,
+        "label_aliases": cast(Dict[str, str], raw_aliases),
+    }
+
+    return {
+        "spotify": spotify_cfg,
+        "collection": collection_cfg,
+        "discovery": discovery_cfg,
+    }
 
 
 @lru_cache(maxsize=1)

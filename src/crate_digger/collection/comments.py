@@ -9,6 +9,14 @@ from mutagen.id3 import COMM, ID3NoHeaderError
 
 REKORDBOX_COMMENT_BLOCK_RE = re.compile(r"/\*(.*?)\*/", re.DOTALL)
 COMMENT_KEYS = ("comment", "comments", "description")
+PROFILE_TAGS = {
+    "tech": ("palette", "tech"),
+    "house": ("palette", "house"),
+    "groovy": ("groove", "groovy"),
+    "rolling": ("groove", "rolling"),
+    "deep": ("palette", "deep"),
+    "minimal": ("palette", "minimal"),
+}
 
 
 @dataclass(frozen=True)
@@ -29,6 +37,22 @@ def clean_rekordbox_comment_tags(comment: str | None) -> str | None:
             blocks.append(block)
 
     return " ".join(blocks) if blocks else None
+
+
+def extract_profile_tags(comment: str | None) -> tuple[tuple[str, str], ...]:
+    """Extract and canonicalise Rekordbox-style ``/* A / B */`` comment tags."""
+
+    if not comment:
+        return ()
+    tags: set[tuple[str, str]] = set()
+    for match in REKORDBOX_COMMENT_BLOCK_RE.finditer(comment):
+        for raw_tag in match.group(1).split("/"):
+            value = " ".join(raw_tag.split()).casefold()
+            if not value:
+                continue
+            category, canonical = PROFILE_TAGS.get(value, ("legacy", value))
+            tags.add((category, canonical))
+    return tuple(sorted(tags))
 
 
 def write_rekordbox_comment_tags_only(path: Path) -> CommentCleanupWriteResult:

@@ -475,6 +475,7 @@ def query_tracks(
 
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("pragma foreign_keys = on")
     conn.execute(
         """
         create table if not exists tracks (
@@ -533,6 +534,81 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         "create index if not exists idx_tracks_spotify_skipped "
         "on tracks(spotify_link_skipped_at)"
+    )
+    conn.execute(
+        """
+        create table if not exists track_profiles (
+            track_path text primary key,
+            energy integer check (energy between 1 and 5),
+            personal_rating integer check (personal_rating between 1 and 5),
+            set_role text check (
+                set_role in (
+                    'warmup', 'builder', 'peak', 'reset', 'afterhours', 'closer'
+                )
+            ),
+            notes text,
+            updated_at text not null,
+            foreign key (track_path) references tracks(path) on delete cascade
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists track_tags (
+            track_path text not null,
+            category text not null check (
+                category in ('groove', 'palette', 'mood', 'structure', 'legacy')
+            ),
+            value text not null,
+            source text not null check (
+                source in ('manual', 'rekordbox', 'traktor', 'model')
+            ),
+            approved integer not null check (approved in (0, 1)),
+            confidence real,
+            updated_at text not null,
+            primary key (track_path, category, value, source),
+            foreign key (track_path) references tracks(path) on delete cascade
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists track_source_metadata (
+            track_path text not null,
+            source text not null check (source in ('rekordbox', 'traktor')),
+            source_track_id text,
+            legacy_rating integer check (legacy_rating between 1 and 5),
+            genre text,
+            comment text,
+            comment2 text,
+            imported_at text not null,
+            primary key (track_path, source),
+            foreign key (track_path) references tracks(path) on delete cascade
+        )
+        """
+    )
+    conn.execute(
+        """
+        create table if not exists library_imports (
+            id integer primary key autoincrement,
+            source_type text not null check (source_type in ('rekordbox', 'traktor')),
+            source_file text not null,
+            imported_at text not null,
+            dry_run integer not null check (dry_run in (0, 1)),
+            parsed_count integer not null,
+            matched_count integer not null,
+            unmatched_count integer not null,
+            ambiguous_count integer not null,
+            invalid_count integer not null
+        )
+        """
+    )
+    conn.execute(
+        "create index if not exists idx_track_tags_path on track_tags(track_path)"
+    )
+    conn.execute(
+        "create index if not exists idx_source_metadata_source "
+        "on track_source_metadata(source)"
     )
 
 

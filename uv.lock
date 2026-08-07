@@ -272,7 +272,7 @@ wheels = [
 [[package]]
 name = "crate-digger"
 version = "1.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mutagen" },
     { name = "pandas" },

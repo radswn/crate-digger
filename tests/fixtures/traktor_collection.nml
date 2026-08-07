@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<NML VERSION="19">
+  <COLLECTION ENTRIES="3">
+    <ENTRY TITLE="Night Drive" ARTIST="Ada" AUDIO_ID="stable-1">
+      <LOCATION DIR="/:Music/:" FILE="Night Drive.mp3" VOLUME="C:" />
+      <INFO GENRE="Techno" COMMENT="/* Rolling / Deep */" COMMENT2="/* Odd Tag */" RANKING="255" />
+    </ENTRY>
+    <ENTRY TITLE="Unrated" ARTIST="Bea">
+      <LOCATION DIR="/:mnt/:music/:" FILE="unrated.flac" VOLUME="/" />
+      <INFO RANKING="broken" />
+    </ENTRY>
+    <ENTRY TITLE="No Location" ARTIST="Cid"><INFO RANKING="51" /></ENTRY>
+  </COLLECTION>
+</NML>

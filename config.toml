@@ -14,3 +14,8 @@ scopes = [
 music-dirs = [
     "/mnt/c/Users/Radek/Music/download"
 ]
+
+[discovery]
+freshness-days = 90
+
+[discovery.label-aliases]
