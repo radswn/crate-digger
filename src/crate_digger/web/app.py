@@ -16,6 +16,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from crate_digger.collection.index import (
@@ -43,6 +44,9 @@ from crate_digger.collection.scanner import overwrite_embedded_artwork
 from crate_digger.utils.config import get_settings
 from crate_digger.utils.logging import get_logger
 from crate_digger.utils.spotify import get_spotify_client
+from crate_digger.web.discover import create_discover_router
+from crate_digger.web.genres import create_genres_router, pending_count
+from crate_digger.web.templating import STATIC_DIR, render_template
 
 logger = get_logger(__name__)
 T = TypeVar("T")
@@ -179,6 +183,9 @@ def create_app(
         yield
 
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.include_router(create_discover_router(db_path, config_path))
+    app.include_router(create_genres_router(db_path))
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -240,6 +247,7 @@ def create_app(
             _render_index(
                 view,
                 collection["music_dirs"],
+                genre_pending=pending_count(db_path),
                 auto_artwork_status=_auto_artwork_refresh_snapshot(
                     _get_auto_artwork_refresh_state(app)
                 ),
@@ -1812,722 +1820,42 @@ def _render_index(
     view: CollectionView,
     music_dirs: list[str],
     *,
+    genre_pending: int = 0,
     auto_artwork_status: dict[str, object] | None = None,
     comment_cleanup_status: dict[str, object] | None = None,
 ) -> str:
-    rows = "\n".join(_render_track_row(track, view) for track in view.tracks)
-    empty = ""
-    if not music_dirs:
-        empty = '<p class="empty">No collection directories configured.</p>'
-    elif not view.tracks:
-        empty = '<p class="empty">No tracks match the current view.</p>'
-
     showing_start = (
         0
         if view.filtered_count == 0
         else ((view.query.page - 1) * view.query.page_size + 1)
     )
     showing_end = min(view.filtered_count, view.query.page * view.query.page_size)
-
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Crate Digger</title>
-  <style>
-    :root {{
-      color-scheme: light;
-      --ink: #191b22;
-      --muted: #636978;
-      --line: #d8dce5;
-      --panel: #f6f7f9;
-      --accent: #0f766e;
-      --accent-2: #b45309;
-      --bg: #ffffff;
-    }}
-    * {{ box-sizing: border-box; }}
-    body {{
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.45;
-    }}
-    header {{
-      border-bottom: 1px solid var(--line);
-      background: var(--panel);
-    }}
-    .wrap {{
-      width: min(1760px, calc(100vw - 24px));
-      margin: 0 auto;
-    }}
-    .wrap-compact {{
-      width: min(1180px, calc(100vw - 32px));
-    }}
-    .topbar {{
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 24px;
-      padding: 16px 0 14px;
-    }}
-    h1 {{
-      margin: 0;
-      font-size: 28px;
-      font-weight: 750;
-      letter-spacing: 0;
-    }}
-    .summary {{
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      color: var(--muted);
-      font-size: 14px;
-    }}
-    .metric {{
-      border-left: 3px solid var(--accent);
-      padding-left: 10px;
-      min-width: 84px;
-    }}
-    .metric strong {{
-      display: block;
-      color: var(--ink);
-      font-size: 18px;
-      line-height: 1.1;
-    }}
-    main {{
-      padding: 12px 0 28px;
-    }}
-    .controls {{
-      display: grid;
-      grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(130px, auto)) auto;
-      gap: 10px;
-      align-items: end;
-      margin-bottom: 10px;
-    }}
-    label {{
-      display: grid;
-      gap: 5px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0;
-    }}
-    input, select, button, .button {{
-      height: 36px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #fff;
-      color: var(--ink);
-      font: inherit;
-      font-size: 14px;
-    }}
-    input, select {{
-      width: 100%;
-      padding: 0 10px;
-    }}
-    button, .button {{
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 12px;
-      text-decoration: none;
-      font-weight: 700;
-      cursor: pointer;
-    }}
-    button {{
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }}
-    .button {{
-      color: var(--muted);
-    }}
-    .viewbar {{
-      display: grid;
-      grid-template-columns: 1fr auto auto;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 8px;
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    .viewbar-actions {{
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }}
-    .viewbar form {{
-      margin: 0;
-    }}
-    .viewbar button {{
-      height: 30px;
-      background: #fff;
-      color: var(--muted);
-      border-color: var(--line);
-    }}
-    .navlink {{
-      height: 30px;
-      color: var(--muted);
-    }}
-    .spotify-cell {{
-      width: 360px;
-    }}
-    .spotify-actions {{
-      display: flex;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 6px;
-    }}
-    .spotify-actions form {{
-      margin: 0;
-    }}
-    .spotify-url-form {{
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      flex: 1 1 170px;
-      min-width: 0;
-    }}
-    .spotify-url-input {{
-      width: min(180px, 100%);
-      min-width: 90px;
-      height: 28px;
-      padding: 0 8px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      color: var(--ink);
-      font: inherit;
-      font-size: 12px;
-    }}
-    .spotify-url-form .spotify-action {{
-      padding-inline: 8px;
-    }}
-    button.soundcloud-action {{
-      background: #f97316;
-      border-color: #f97316;
-      color: #fff;
-    }}
-    button.soundcloud-action:hover {{
-      background: #ea580c;
-      border-color: #ea580c;
-    }}
-    .spotify-action {{
-      height: 28px;
-      padding: 0 10px;
-      color: var(--accent);
-      font-size: 13px;
-    }}
-    button.spotify-action {{
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }}
-    .spotify-linked {{
-      color: var(--muted);
-      font-size: 13px;
-      font-weight: 700;
-      text-decoration: none;
-    }}
-    .comment-cell {{
-      display: grid;
-      gap: 4px;
-      align-items: start;
-      justify-items: start;
-      min-width: 0;
-      white-space: normal;
-    }}
-    .comment-cell form {{
-      margin: 0;
-    }}
-    .comment-actions {{
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-    }}
-    .comment-preview {{
-      max-width: 100%;
-      color: var(--ink);
-      font-size: 12px;
-      font-weight: 650;
-      line-height: 1.2;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
-    .comment-preview.muted {{
-      color: var(--muted);
-    }}
-    .status-result {{
-      display: inline;
-    }}
-    dialog {{
-      width: min(860px, calc(100vw - 32px));
-      max-height: min(760px, calc(100vh - 32px));
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 0;
-      color: var(--ink);
-      background: #fff;
-    }}
-    dialog::backdrop {{
-      background: rgba(25, 27, 34, 0.35);
-    }}
-    .modal-header {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--line);
-      background: var(--panel);
-    }}
-    .modal-close {{
-      height: 30px;
-      background: #fff;
-      color: var(--muted);
-      border-color: var(--line);
-    }}
-    .spotify-modal-body {{
-      padding: 14px;
-      overflow: auto;
-      max-height: calc(100vh - 112px);
-    }}
-    .linkbar {{
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      margin-bottom: 12px;
-    }}
-    .link-layout {{
-      display: grid;
-      grid-template-columns: 280px 1fr;
-      gap: 18px;
-      align-items: start;
-    }}
-    .local-track {{
-      display: grid;
-      grid-template-columns: 72px 1fr;
-      gap: 12px;
-      padding: 12px 0;
-      border-top: 1px solid var(--line);
-      border-bottom: 1px solid var(--line);
-    }}
-    .local-track .cover {{
-      width: 72px;
-      height: 72px;
-    }}
-    .candidate-list {{
-      display: grid;
-      gap: 8px;
-    }}
-    .query {{
-      color: var(--muted);
-      font-size: 12px;
-    }}
-    .candidate {{
-      display: grid;
-      grid-template-columns: 62px 1fr auto;
-      gap: 12px;
-      align-items: center;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--line);
-    }}
-    .candidate-cover {{
-      width: 54px;
-      height: 54px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      object-fit: cover;
-      background: var(--panel);
-    }}
-    .candidate p {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    .candidate-actions {{
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }}
-    .candidate-open {{
-      color: var(--accent);
-      font-size: 13px;
-      font-weight: 700;
-      text-decoration: none;
-    }}
-    .table {{
-      width: 100%;
-      border-collapse: collapse;
-      table-layout: fixed;
-      border-top: 1px solid var(--line);
-    }}
-    .cover-cell {{
-      width: 72px;
-    }}
-    .cover {{
-      display: block;
-      width: 56px;
-      height: 56px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      object-fit: cover;
-      background: var(--panel);
-    }}
-    .cover-placeholder {{
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: var(--muted);
-      font-size: 15px;
-      font-weight: 800;
-    }}
-    th, td {{
-      padding: 8px 10px;
-      border-bottom: 1px solid var(--line);
-      text-align: left;
-      vertical-align: middle;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
-    th {{
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0;
-    }}
-    th a {{
-      color: inherit;
-      text-decoration: none;
-    }}
-    th a:hover {{
-      color: var(--ink);
-    }}
-    td {{
-      font-size: 14px;
-    }}
-    .track-title {{
-      font-weight: 650;
-    }}
-    .path {{
-      color: var(--muted);
-      font-size: 12px;
-    }}
-    .pill {{
-      display: inline-flex;
-      align-items: center;
-      height: 24px;
-      padding: 0 8px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      color: var(--accent-2);
-      background: #fffaf2;
-      font-size: 12px;
-      font-weight: 700;
-    }}
-    .empty {{
-      margin: 38px 0;
-      color: var(--muted);
-      font-size: 15px;
-    }}
-    .auto-artwork {{
-      margin: 14px 0;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: var(--panel);
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    .auto-artwork strong {{
-      color: var(--ink);
-    }}
-    .pagination {{
-      display: flex;
-      align-items: center;
-      justify-content: flex-end;
-      gap: 8px;
-      margin: 0;
-      color: var(--muted);
-      font-size: 13px;
-    }}
-    .pagination .button {{
-      min-width: 82px;
-    }}
-    @media (max-width: 760px) {{
-      .topbar {{
-        display: block;
-      }}
-      .summary {{
-        margin-top: 14px;
-      }}
-      .controls {{
-        grid-template-columns: 1fr 1fr;
-      }}
-      .controls label:first-child {{
-        grid-column: 1 / -1;
-      }}
-      .viewbar {{
-        grid-template-columns: 1fr;
-      }}
-      .viewbar-actions {{
-        justify-content: flex-start;
-        flex-wrap: wrap;
-      }}
-      .pagination {{
-        align-items: flex-start;
-      }}
-      .link-layout, .candidate {{
-        grid-template-columns: 1fr;
-      }}
-      th:nth-child(5), td:nth-child(5),
-      th:nth-child(6), td:nth-child(6),
-      th:nth-child(8), td:nth-child(8),
-      th:nth-child(10), td:nth-child(10),
-      th:nth-child(12), td:nth-child(12) {{
-        display: none;
-      }}
-      th, td {{
-        padding-inline: 6px;
-      }}
-    }}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="wrap topbar">
-      <h1>Crate Digger</h1>
-      <div class="summary">
-        <div class="metric"><strong>{view.total_count}</strong>tracks</div>
-        <div class="metric"><strong>{len(music_dirs)}</strong>folders</div>
-      </div>
-    </div>
-  </header>
-  <main class="wrap">
-    {_render_controls(view)}
-    {_render_auto_artwork_status(auto_artwork_status)}
-    {_render_comment_cleanup_status(comment_cleanup_status)}
-    <div class="viewbar">
-      <span>Showing {showing_start}-{showing_end} of {view.filtered_count} matching tracks</span>
-      {_render_pagination(view)}
-      <div class="viewbar-actions">
-        <form method="post" action="/spotify-artwork-refresh">
-          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
-          <button type="submit">Run Spotify sweep</button>
-        </form>
-        <form method="post" action="/comment-cleanup">
-          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
-          <button type="submit">Clean comments sweep</button>
-        </form>
-        <form method="post" action="/comment-clear">
-          <input type="hidden" name="return_to" value="{escape(_url_for(view))}">
-          <button type="submit">Clear comments sweep</button>
-        </form>
-        <form method="post" action="/reindex">
-          <button type="submit">Refresh index</button>
-        </form>
-      </div>
-    </div>
-    {empty}
-    <table class="table" {"hidden" if not view.tracks else ""}>
-      <thead>
-        <tr>
-          <th class="cover-cell"></th>
-          <th style="width: 16%">{_sort_link(view, "title")}</th>
-          <th style="width: 118px">Comment</th>
-          <th style="width: 10%">{_sort_link(view, "artist")}</th>
-          <th style="width: 10%">{_sort_link(view, "album")}</th>
-          <th style="width: 7%">{_sort_link(view, "genre")}</th>
-          <th style="width: 7%">{_sort_link(view, "release_date")}</th>
-          <th style="width: 7%">{_sort_link(view, "file_created_at")}</th>
-          <th style="width: 6%">{_sort_link(view, "format")}</th>
-          <th style="width: 7%">{_sort_link(view, "bitrate")}</th>
-          <th style="width: 6%">{_sort_link(view, "duration")}</th>
-          <th class="spotify-cell">Source</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows}
-      </tbody>
-    </table>
-    <dialog id="spotify-dialog">
-      <div class="modal-header">
-        <strong>Spotify</strong>
-        <button class="modal-close" type="button" data-spotify-close>Close</button>
-      </div>
-      <div class="spotify-modal-body" id="spotify-dialog-content"></div>
-    </dialog>
-    <script>
-      const spotifyDialog = document.getElementById("spotify-dialog");
-      const spotifyDialogContent = document.getElementById("spotify-dialog-content");
-
-      async function loadSpotifyModal(url) {{
-        spotifyDialogContent.innerHTML = '<p class="empty">Loading...</p>';
-        spotifyDialog.showModal();
-        const response = await fetch(url, {{ headers: {{ "X-Requested-With": "fetch" }} }});
-        spotifyDialogContent.innerHTML = await response.text();
-      }}
-
-      function refreshCoverImages() {{
-        const artPath = pageParams.get("art_path");
-        document.querySelectorAll(".cover[data-cover-path]").forEach((cover) => {{
-          if (artPath && cover.dataset.coverPath !== artPath) return;
-
-          const url = new URL("/art", window.location.origin);
-          url.searchParams.set("path", cover.dataset.coverPath);
-          url.searchParams.set("refresh", Date.now().toString());
-          if (cover.tagName === "IMG") {{
-            cover.src = url.toString();
-            return;
-          }}
-
-          const image = new Image();
-          image.className = "cover";
-          image.alt = "";
-          image.dataset.coverPath = cover.dataset.coverPath;
-          image.onload = () => {{
-            cover.replaceWith(image);
-          }};
-          image.src = url.toString();
-        }});
-      }}
-
-      const pageParams = new URLSearchParams(window.location.search);
-      if (pageParams.get("art_refresh") === "1") {{
-        pageParams.delete("art_refresh");
-        pageParams.delete("art_path");
-        const cleanQuery = pageParams.toString();
-        const cleanUrl = `${{window.location.pathname}}${{cleanQuery ? `?${{cleanQuery}}` : ""}}`;
-        window.history.replaceState(null, "", cleanUrl);
-        [0, 1000, 3000, 7000, 15000].forEach((delay) => {{
-          window.setTimeout(refreshCoverImages, delay);
-        }});
-      }}
-
-      function renderAutoArtworkStatus(status) {{
-        const node = document.getElementById("auto-artwork-status");
-        if (!node) return;
-        if (!status.running && Number(status.total || 0) === 0) {{
-          node.hidden = true;
-          return;
-        }}
-
-        node.hidden = false;
-        const total = Number(status.total || 0);
-        const processed = Number(status.processed || 0);
-        const linked = Number(status.linked || 0);
-        const artworkUpdated = Number(status.artwork_updated || 0);
-        const noResults = Number(status.no_results || 0);
-        const failed = Number(status.failed || 0);
-        const escapeHtml = (value) => value
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#x27;");
-        const current = status.current ? ` · Current: <strong>${{escapeHtml(status.current)}}</strong>` : "";
-        if (status.running) {{
-          node.innerHTML = `<strong>Spotify sweep running</strong> · ${{processed}}/${{total}} processed · ${{linked}} linked · ${{artworkUpdated}} covers · ${{noResults}} no results · ${{failed}} failed${{current}}`;
-          return;
-        }}
-        node.innerHTML = `<strong>Spotify sweep complete</strong> · ${{processed}}/${{total}} processed · ${{linked}} linked · ${{artworkUpdated}} covers · ${{noResults}} no results · ${{failed}} failed`;
-      }}
-
-      async function pollAutoArtworkStatus() {{
-        const node = document.getElementById("auto-artwork-status");
-        if (!node || node.hidden) return;
-        const response = await fetch("/api/spotify-artwork-refresh");
-        const status = await response.json();
-        renderAutoArtworkStatus(status);
-        if (status.running) {{
-          window.setTimeout(pollAutoArtworkStatus, 2500);
-        }} else if (Number(status.artwork_updated || 0) > 0) {{
-          window.setTimeout(refreshCoverImages, 250);
-        }}
-      }}
-
-      function renderCommentCleanupStatus(status) {{
-        const node = document.getElementById("comment-cleanup-status");
-        if (!node) return;
-        if (!status.running && Number(status.total || 0) === 0) {{
-          node.hidden = true;
-          return;
-        }}
-
-        node.hidden = false;
-        const total = Number(status.total || 0);
-        const processed = Number(status.processed || 0);
-        const cleaned = Number(status.cleaned || 0);
-        const skipped = Number(status.skipped || 0);
-        const failed = Number(status.failed || 0);
-        const escapeHtml = (value) => String(value)
-          .replaceAll("&", "&amp;")
-          .replaceAll("<", "&lt;")
-          .replaceAll(">", "&gt;")
-          .replaceAll('"', "&quot;")
-          .replaceAll("'", "&#x27;");
-        const renderResult = (result) => {{
-          if (!result) return "";
-          const label = escapeHtml(result.label || "");
-          if (!result.cleaned) {{
-            return ` · <span class="status-result">${{label}}: unchanged</span>`;
-          }}
-          const before = escapeHtml(result.before_comment || "empty");
-          const after = escapeHtml(result.after_comment || "empty");
-          if (result.clear_all || !result.after_comment) {{
-            return ` · <span class="status-result">${{label}}: removed comment (was ${{before}})</span>`;
-          }}
-          return ` · <span class="status-result">${{label}}: kept <strong>${{after}}</strong> (was ${{before}})</span>`;
-        }};
-        const current = status.current ? ` · Current: <strong>${{escapeHtml(status.current)}}</strong>` : "";
-        const result = renderResult(status.last_result);
-        if (status.running) {{
-          node.innerHTML = `<strong>Comment cleanup sweep running</strong> · ${{processed}}/${{total}} processed · ${{cleaned}} cleaned · ${{skipped}} skipped · ${{failed}} failed${{current}}${{result}}`;
-          return;
-        }}
-        node.innerHTML = `<strong>Comment cleanup sweep complete</strong> · ${{processed}}/${{total}} processed · ${{cleaned}} cleaned · ${{skipped}} skipped · ${{failed}} failed${{result}}`;
-      }}
-
-      async function pollCommentCleanupStatus() {{
-        const node = document.getElementById("comment-cleanup-status");
-        if (!node || node.hidden) return;
-        const response = await fetch("/api/comment-cleanup");
-        const status = await response.json();
-        renderCommentCleanupStatus(status);
-        if (status.running) {{
-          window.setTimeout(pollCommentCleanupStatus, 2500);
-        }} else if (Number(status.cleaned || 0) > 0 && pageParams.get("comment_refresh") !== "1") {{
-          const url = new URL(window.location.href);
-          url.searchParams.set("comment_refresh", "1");
-          window.setTimeout(() => {{
-            window.location.href = url.toString();
-          }}, 250);
-        }}
-      }}
-
-      pollAutoArtworkStatus();
-      pollCommentCleanupStatus();
-
-      document.addEventListener("click", (event) => {{
-        const opener = event.target.closest("[data-spotify-modal-url]");
-        if (opener) {{
-          event.preventDefault();
-          loadSpotifyModal(opener.dataset.spotifyModalUrl);
-        }}
-
-        if (event.target.closest("[data-spotify-close]")) {{
-          spotifyDialog.close();
-        }}
-      }});
-    </script>
-  </main>
-</body>
-</html>"""
+    sort_keys: tuple[SortKey, ...] = (
+        "title",
+        "artist",
+        "album",
+        "genre",
+        "release_date",
+        "file_created_at",
+        "format",
+        "bitrate",
+        "duration",
+    )
+    return render_template(
+        "dashboard.html",
+        view=view,
+        music_dirs_count=len(music_dirs),
+        genre_pending=genre_pending,
+        showing_start=showing_start,
+        showing_end=showing_end,
+        controls=_render_controls(view),
+        auto_artwork=_render_auto_artwork_status(auto_artwork_status),
+        comment_cleanup=_render_comment_cleanup_status(comment_cleanup_status),
+        pagination=_render_pagination(view),
+        return_to=_url_for(view),
+        sort_links={key: _sort_link(view, key) for key in sort_keys},
+        rows="\n".join(_render_track_row(track, view) for track in view.tracks),
+    )
 
 
 def _render_auto_artwork_status(status: dict[str, object] | None) -> str:
@@ -2638,78 +1966,37 @@ def _status_int(value: object) -> int:
 
 
 def _render_controls(view: CollectionView) -> str:
-    format_options = ['<option value="">All formats</option>']
-    format_options.extend(
-        f'<option value="{escape(audio_format)}" {_selected(view.query.audio_format, audio_format)}>'
-        f"{escape(audio_format)}</option>"
-        for audio_format in view.formats
+    return render_template(
+        "partials/collection_controls.html",
+        view=view,
+        spotify_filters=SPOTIFY_FILTER_LABELS,
     )
-    spotify_options = "\n".join(
-        f'<option value="{escape(key)}" {_selected(view.query.spotify, key)}>'
-        f"{escape(label)}</option>"
-        for key, label in SPOTIFY_FILTER_LABELS.items()
-    )
-    return f"""<form class="controls" method="get">
-  <label>
-    Search
-    <input type="search" name="q" value="{escape(view.query.q)}" placeholder="Title, artist, album, path">
-  </label>
-  <label>
-    Format
-    <select name="format">
-      {"".join(format_options)}
-    </select>
-  </label>
-  <label>
-    Spotify
-    <select name="spotify">
-      {spotify_options}
-    </select>
-  </label>
-  <input type="hidden" name="sort" value="{escape(view.query.sort)}">
-  <input type="hidden" name="direction" value="{escape(view.query.direction)}">
-  <button type="submit">Apply</button>
-  <a class="button" href="/">Reset</a>
-</form>"""
 
 
 def _render_pagination(view: CollectionView) -> str:
-    previous_link = _page_link(view, view.query.page - 1, "Previous")
-    next_link = _page_link(view, view.query.page + 1, "Next")
-    return f"""<nav class="pagination" aria-label="Pagination">
-  {previous_link}
-  <span>Page {view.query.page} of {view.total_pages}</span>
-  {next_link}
-</nav>"""
+    return render_template(
+        "partials/collection_pagination.html",
+        view=view,
+        previous_link=_page_link(view, view.query.page - 1, "Previous"),
+        next_link=_page_link(view, view.query.page + 1, "Next"),
+    )
 
 
 def _render_spotify_link_idle(music_dirs: list[str]) -> str:
-    return _render_page_shell(
+    return render_template(
+        "link_page.html",
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
-        body="""
-  <main class="wrap wrap-compact">
-    <div class="link-layout">
-      <p class="empty">Choose a track from the collection list to search Spotify.</p>
-      <a class="button" href="/">Back to collection</a>
-    </div>
-  </main>
-""",
+        state="idle",
     )
 
 
 def _render_spotify_link_done(music_dirs: list[str]) -> str:
-    return _render_page_shell(
+    return render_template(
+        "link_page.html",
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
-        body="""
-  <main class="wrap wrap-compact">
-    <div class="link-layout">
-      <p class="empty">That local track is no longer in the collection index.</p>
-      <a class="button" href="/">Back to collection</a>
-    </div>
-  </main>
-""",
+        state="done",
     )
 
 
@@ -2730,14 +2017,12 @@ def _render_spotify_link_page(
         return_to=return_to,
         lookup_error=lookup_error,
     )
-    return _render_page_shell(
+    return render_template(
+        "link_page.html",
         title="Spotify Linker",
         summary=f"{len(music_dirs)} folders",
-        body=f"""
-  <main class="wrap wrap-compact">
-    {content}
-  </main>
-""",
+        state="active",
+        content=content,
     )
 
 
@@ -2750,74 +2035,46 @@ def _render_spotify_link_content(
     return_to: str,
     lookup_error: str | None,
 ) -> str:
-    candidate_rows = "\n".join(
-        _render_spotify_candidate(track, candidate, return_to)
-        for candidate in candidates
-    )
-    if not candidate_rows:
-        candidate_rows = '<p class="empty">No Spotify results for this query.</p>'
-    if lookup_error:
-        candidate_rows = f'<p class="empty">{escape(lookup_error)}</p>'
-
     next_offset = offset + SPOTIFY_LINK_LIMIT
     previous_offset = max(0, offset - SPOTIFY_LINK_LIMIT)
-    previous_href = _spotify_link_href(
+    return render_template(
+        "partials/link_content.html",
         track=track,
-        offset=previous_offset,
+        partial=partial,
         return_to=return_to,
-        partial=False,
+        cover=_render_cover(track),
+        short_path=_short_path(track.path),
+        search_query=_spotify_search_query(track),
+        lookup_error=lookup_error,
+        candidate_rows="\n".join(
+            _render_spotify_candidate(track, candidate, return_to)
+            for candidate in candidates
+        ),
+        previous_href=_spotify_link_href(
+            track=track,
+            offset=previous_offset,
+            return_to=return_to,
+            partial=False,
+        ),
+        next_href=_spotify_link_href(
+            track=track,
+            offset=next_offset,
+            return_to=return_to,
+            partial=False,
+        ),
+        previous_modal_url=_spotify_link_href(
+            track=track,
+            offset=previous_offset,
+            return_to=return_to,
+            partial=True,
+        ),
+        next_modal_url=_spotify_link_href(
+            track=track,
+            offset=next_offset,
+            return_to=return_to,
+            partial=True,
+        ),
     )
-    next_href = _spotify_link_href(
-        track=track,
-        offset=next_offset,
-        return_to=return_to,
-        partial=False,
-    )
-    previous_modal_url = _spotify_link_href(
-        track=track,
-        offset=previous_offset,
-        return_to=return_to,
-        partial=True,
-    )
-    next_modal_url = _spotify_link_href(
-        track=track,
-        offset=next_offset,
-        return_to=return_to,
-        partial=True,
-    )
-    collection_link = (
-        f'<a class="button" href="{escape(return_to)}">Collection</a>'
-        if not partial
-        else ""
-    )
-
-    return f"""
-    <div class="linkbar">
-      {collection_link}
-      <form method="post" action="/spotify-link/skip">
-        <input type="hidden" name="path" value="{escape(str(track.path))}">
-        <input type="hidden" name="return_to" value="{escape(return_to)}">
-        <button type="submit">Skip</button>
-      </form>
-      <a class="button" href="{escape(previous_href)}" data-spotify-modal-url="{escape(previous_modal_url)}">Previous results</a>
-      <a class="button" href="{escape(next_href)}" data-spotify-modal-url="{escape(next_modal_url)}">More results</a>
-    </div>
-    <section class="link-layout">
-      <div class="local-track">
-        {_render_cover(track)}
-        <div>
-          <h2>{escape(track.display_title)}</h2>
-          <p>{escape(track.display_artist)}</p>
-          <p>{escape(track.album or "Unknown album")}</p>
-          <p class="path">{escape(_short_path(track.path))}</p>
-        </div>
-      </div>
-      <div class="candidate-list">
-        <p class="query">Spotify search: {escape(_spotify_search_query(track))}</p>
-        {candidate_rows}
-      </div>
-    </section>
-"""
 
 
 def _render_spotify_candidate(
@@ -2825,38 +2082,13 @@ def _render_spotify_candidate(
     candidate: SpotifyCandidate,
     return_to: str,
 ) -> str:
-    external_link = ""
-    if candidate.external_url:
-        external_link = (
-            f'<a class="candidate-open" href="{escape(candidate.external_url)}" '
-            'target="_blank" rel="noreferrer">Open</a>'
-        )
-    cover = _render_candidate_cover(candidate)
-    image_input = ""
-    if candidate.image_url:
-        image_input = (
-            f'<input type="hidden" name="image_url" '
-            f'value="{escape(candidate.image_url)}">'
-        )
-    return f"""<div class="candidate">
-  {cover}
-  <div>
-    <strong>{escape(candidate.name)}</strong>
-    <p>{escape(candidate.artists)}</p>
-    <p>{escape(candidate.album)}</p>
-    <p class="path">{escape(candidate.uri)}</p>
-  </div>
-  <div class="candidate-actions">
-    {external_link}
-    <form method="post" action="/spotify-link/link">
-      <input type="hidden" name="path" value="{escape(str(track.path))}">
-      <input type="hidden" name="spotify_uri" value="{escape(candidate.uri)}">
-      {image_input}
-      <input type="hidden" name="return_to" value="{escape(return_to)}">
-      <button type="submit">Link</button>
-    </form>
-  </div>
-</div>"""
+    return render_template(
+        "partials/link_candidate.html",
+        track=track,
+        candidate=candidate,
+        return_to=return_to,
+        cover=_render_candidate_cover(candidate),
+    )
 
 
 def _spotify_link_href(
@@ -2880,212 +2112,6 @@ def _render_candidate_cover(candidate: SpotifyCandidate) -> str:
     if candidate.image_url is None:
         return '<span class="candidate-cover"></span>'
     return f'<img class="candidate-cover" src="{escape(candidate.image_url)}" alt="">'
-
-
-def _dashboard_css() -> str:
-    return """
-    :root {
-      color-scheme: light;
-      --ink: #191b22;
-      --muted: #636978;
-      --line: #d8dce5;
-      --panel: #f6f7f9;
-      --accent: #0f766e;
-      --accent-2: #b45309;
-      --bg: #ffffff;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--ink);
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      line-height: 1.45;
-    }
-    header {
-      border-bottom: 1px solid var(--line);
-      background: var(--panel);
-    }
-    .wrap {
-      width: min(1180px, calc(100vw - 32px));
-      margin: 0 auto;
-    }
-    .wrap-compact {
-      width: min(1180px, calc(100vw - 32px));
-    }
-    .topbar {
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 24px;
-      padding: 16px 0 14px;
-    }
-    h1, h2, p {
-      margin: 0;
-    }
-    h1 {
-      font-size: 28px;
-      font-weight: 750;
-      letter-spacing: 0;
-    }
-    h2 {
-      font-size: 20px;
-      letter-spacing: 0;
-    }
-    main {
-      padding: 14px 0 32px;
-    }
-    .summary {
-      display: flex;
-      gap: 12px;
-      color: var(--muted);
-      font-size: 14px;
-    }
-    .metric {
-      border-left: 3px solid var(--accent);
-      padding-left: 10px;
-      min-width: 84px;
-    }
-    .button, button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      height: 34px;
-      padding: 0 12px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      background: #fff;
-      color: var(--ink);
-      font: inherit;
-      font-size: 14px;
-      font-weight: 700;
-      text-decoration: none;
-      cursor: pointer;
-    }
-    button {
-      background: var(--accent);
-      color: #fff;
-      border-color: var(--accent);
-    }
-    .linkbar {
-      display: flex;
-      gap: 8px;
-      justify-content: flex-end;
-      margin-bottom: 12px;
-    }
-    .link-layout {
-      display: grid;
-      grid-template-columns: 320px 1fr;
-      gap: 20px;
-      align-items: start;
-    }
-    .local-track {
-      display: grid;
-      grid-template-columns: 84px 1fr;
-      gap: 14px;
-      padding: 14px 0;
-      border-top: 1px solid var(--line);
-      border-bottom: 1px solid var(--line);
-    }
-    .local-track .cover {
-      width: 84px;
-      height: 84px;
-    }
-    .cover {
-      display: block;
-      width: 42px;
-      height: 42px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      object-fit: cover;
-      background: var(--panel);
-    }
-    .cover-placeholder {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .path, .query {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .candidate-list {
-      display: grid;
-      gap: 8px;
-    }
-    .candidate {
-      display: grid;
-      grid-template-columns: 54px 1fr auto;
-      gap: 12px;
-      align-items: center;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .candidate-cover {
-      width: 44px;
-      height: 44px;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-      object-fit: cover;
-      background: var(--panel);
-    }
-    .candidate p {
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .candidate-actions {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .candidate-open {
-      color: var(--accent);
-      font-size: 13px;
-      font-weight: 700;
-      text-decoration: none;
-    }
-    .empty {
-      margin: 28px 0;
-      color: var(--muted);
-      font-size: 15px;
-    }
-    @media (max-width: 760px) {
-      .topbar, .linkbar {
-        display: block;
-      }
-      .link-layout {
-        grid-template-columns: 1fr;
-      }
-      .linkbar > * {
-        margin-bottom: 8px;
-      }
-    }
-"""
-
-
-def _render_page_shell(*, title: str, summary: str, body: str) -> str:
-    return f"""<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{escape(title)}</title>
-  <style>
-{_dashboard_css()}
-  </style>
-</head>
-<body>
-  <header>
-    <div class="wrap topbar">
-      <h1>{escape(title)}</h1>
-      <div class="summary">
-        <div class="metric"><strong>{escape(summary)}</strong></div>
-      </div>
-    </div>
-  </header>
-{body}
-</body>
-</html>"""
 
 
 def _sort_link(view: CollectionView, sort: SortKey) -> str:
@@ -3124,179 +2150,51 @@ def _url_for(view: CollectionView, **overrides: object) -> str:
     return f"/?{urlencode(filtered_params)}" if filtered_params else "/"
 
 
-def _selected(current: object, value: object) -> str:
-    return "selected" if current == value else ""
-
-
 def _render_track_row(track: LocalTrack, view: CollectionView) -> str:
-    spotify_action = _render_spotify_action(track, return_to=_url_for(view))
-    comment_attr = f' title="{escape(track.comment)}"' if track.comment else ""
     return_to = _url_for(view)
-    return f"""<tr{comment_attr}>
-  <td class="cover-cell">{_render_cover(track)}</td>
-  <td>
-    <div class="track-title">{escape(track.display_title)}</div>
-    <div class="path">{escape(_short_path(track.path))}</div>
-  </td>
-  <td>{_render_comment_track_action(track, return_to=return_to)}</td>
-  <td>{escape(track.display_artist)}</td>
-  <td>{escape(track.album or "")}</td>
-  <td>{escape(track.genre or "")}</td>
-  <td>{escape(track.release_date or "")}</td>
-  <td>{escape(_format_date(track.file_created_at))}</td>
-  <td><span class="pill">{escape(track.audio_format or "?")}</span></td>
-  <td>{escape(_format_bitrate(track.bitrate))}</td>
-  <td>{escape(_format_duration(track.duration_seconds))}</td>
-  <td class="spotify-cell">{spotify_action}</td>
-</tr>"""
+    return render_template(
+        "partials/track_row.html",
+        track=track,
+        cover=_render_cover(track),
+        short_path=_short_path(track.path),
+        comment_action=_render_comment_track_action(track, return_to=return_to),
+        spotify_action=_render_spotify_action(track, return_to=return_to),
+        created_at=_format_date(track.file_created_at),
+        bitrate=_format_bitrate(track.bitrate),
+        duration=_format_duration(track.duration_seconds),
+    )
 
 
 def _render_comment_track_action(track: LocalTrack, *, return_to: str) -> str:
-    state_class = "comment-preview" if track.comment else "comment-preview muted"
-    preview = track.comment or "none"
-    return f"""<div class="comment-cell">
-  <div class="{state_class}">{escape(preview)}</div>
-  <div class="comment-actions">
-    <form method="post" action="/comment-cleanup/track">
-      <input type="hidden" name="path" value="{escape(str(track.path))}">
-      <input type="hidden" name="return_to" value="{escape(return_to)}">
-      <button class="spotify-action" type="submit">Clean</button>
-    </form>
-    <form method="post" action="/comment-clear/track">
-      <input type="hidden" name="path" value="{escape(str(track.path))}">
-      <input type="hidden" name="return_to" value="{escape(return_to)}">
-      <button class="spotify-action" type="submit">Clear</button>
-    </form>
-  </div>
-</div>"""
+    return render_template(
+        "partials/track_comment_actions.html",
+        track=track,
+        return_to=return_to,
+    )
 
 
 def _render_spotify_action(track: LocalTrack, *, return_to: str) -> str:
-    if track.soundcloud_url:
-        linked = (
-            f'<a class="spotify-linked" href="{escape(track.soundcloud_url)}" '
-            'target="_blank" rel="noreferrer">SoundCloud</a>'
-        )
-        return f"""<div class="spotify-actions">
-  {linked}
-  {_refresh_soundcloud_art_action(track, return_to=return_to)}
-  {_wav_artwork_note(track)}
-  {_spotify_find_link(track, return_to=return_to)}
-  {_manual_spotify_url_form(track, return_to=return_to)}
-  {_manual_soundcloud_url_form(track, return_to=return_to)}
-</div>"""
-
-    if track.spotify_uri:
-        external_url = _spotify_external_url_from_uri(track.spotify_uri)
-        if external_url:
-            linked = (
-                f'<a class="spotify-linked" href="{escape(external_url)}" '
-                'target="_blank" rel="noreferrer">Linked</a>'
-            )
-        else:
-            linked = '<span class="spotify-linked">Linked</span>'
-        art_action = _refresh_spotify_art_action(track, return_to=return_to)
-        return f"""<div class="spotify-actions">
-  {linked}
-  {art_action}
-  {_spotify_find_link(track, return_to=return_to)}
-  {_manual_spotify_url_form(track, return_to=return_to)}
-  {_manual_soundcloud_url_form(track, return_to=return_to)}
-</div>"""
-
-    if track.spotify_link_skipped_at:
-        return f"""<div class="spotify-actions">
-  <span class="spotify-linked">Skipped</span>
-  {_spotify_find_link(track, return_to=return_to)}
-  {_manual_spotify_url_form(track, return_to=return_to)}
-  {_manual_soundcloud_url_form(track, return_to=return_to)}
-</div>"""
-
-    return f"""<div class="spotify-actions">
-  <form method="post" action="/spotify-link/quick-link">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    <button class="spotify-action" type="submit">Link</button>
-  </form>
-  {_spotify_find_link(track, return_to=return_to)}
-  {_manual_spotify_url_form(track, return_to=return_to)}
-  {_manual_soundcloud_url_form(track, return_to=return_to)}
-</div>"""
-
-
-def _spotify_find_link(track: LocalTrack, *, return_to: str) -> str:
-    href = _spotify_link_href(
+    return render_template(
+        "partials/track_source_actions.html",
         track=track,
-        offset=0,
         return_to=return_to,
-        partial=False,
-    )
-    modal_url = _spotify_link_href(
-        track=track,
-        offset=0,
-        return_to=return_to,
-        partial=True,
-    )
-    return (
-        f'<a class="button spotify-action" href="{escape(href)}" '
-        f'data-spotify-modal-url="{escape(modal_url)}">Find</a>'
-    )
-
-
-def _manual_spotify_url_form(track: LocalTrack, *, return_to: str) -> str:
-    spotify_url_input = (
-        '<input class="spotify-url-input" name="spotify_url" type="text" '
-        'inputmode="url" placeholder="Spotify URL" aria-label="Spotify track URL">'
-    )
-    return f"""<form class="spotify-url-form" method="post" action="/spotify-link/manual">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    {spotify_url_input}
-    <button class="spotify-action" type="submit">Use</button>
-  </form>"""
-
-
-def _manual_soundcloud_url_form(track: LocalTrack, *, return_to: str) -> str:
-    soundcloud_url_input = (
-        '<input class="spotify-url-input" name="soundcloud_url" type="text" '
-        'inputmode="url" placeholder="SoundCloud URL" '
-        'aria-label="SoundCloud track URL">'
-    )
-    return f"""<form class="spotify-url-form" method="post" action="/soundcloud-link/manual">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    {soundcloud_url_input}
-    <button class="spotify-action soundcloud-action" type="submit">SC</button>
-  </form>"""
-
-
-def _refresh_spotify_art_action(track: LocalTrack, *, return_to: str) -> str:
-    if track.artwork_mime is not None:
-        return ""
-    return f"""<form method="post" action="/spotify-link/refresh-art">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    <button class="spotify-action" type="submit">Art</button>
-  </form>"""
-
-
-def _refresh_soundcloud_art_action(track: LocalTrack, *, return_to: str) -> str:
-    if not track.soundcloud_url:
-        return ""
-    return f"""<form method="post" action="/soundcloud-link/refresh-art">
-    <input type="hidden" name="path" value="{escape(str(track.path))}">
-    <input type="hidden" name="return_to" value="{escape(return_to)}">
-    <button class="spotify-action" type="submit">Art</button>
-  </form>"""
-
-
-def _wav_artwork_note(track: LocalTrack) -> str:
-    if (track.audio_format or "").upper() != "WAV":
-        return ""
-    return (
-        '<span class="spotify-linked" '
-        'title="WAV has no standard embedded artwork support; Rekordbox may ignore cover art on tag reload.">'
-        "WAV art limit</span>"
+        external_url=(
+            _spotify_external_url_from_uri(track.spotify_uri)
+            if track.spotify_uri
+            else None
+        ),
+        find_href=_spotify_link_href(
+            track=track,
+            offset=0,
+            return_to=return_to,
+            partial=False,
+        ),
+        modal_url=_spotify_link_href(
+            track=track,
+            offset=0,
+            return_to=return_to,
+            partial=True,
+        ),
     )
 
 

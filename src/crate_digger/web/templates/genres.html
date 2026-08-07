@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}Genre review · Crate Digger{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/genres.css">{% endblock %}
+
+{% block header %}
+<header class="genre-header">
+  <nav class="site-nav" aria-label="Main navigation">
+    <a href="/">Collection</a>
+    <a href="/discover">Discover</a>
+    <a href="/genres" aria-current="page">Genre review</a>
+  </nav>
+  <h1>Genre review</h1>
+</header>
+{% endblock %}
+
+{% block content %}
+<main id="main" class="genre-main">
+  <nav class="genre-views" aria-label="Review status">
+    {% for key, label in statuses %}
+      <a href="/genres?{{ {'status': key} | urlencode }}" {% if status == key %}aria-current="page"{% endif %}>{{ label }}</a>
+    {% endfor %}
+  </nav>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  {% if row %}
+    <p class="genre-progress">{{ selected + 1 }} of {{ rows_count }} · {{ row.review_state }}</p>
+    <nav class="genre-pager" aria-label="Tracks">
+      {% if previous_href %}<a href="{{ previous_href }}">← Previous</a>{% endif %}
+      {% if next_href %}<a href="{{ next_href }}">Next →</a>{% endif %}
+    </nav>
+    <article class="genre-card">
+      <h2>{{ row.artist or '' }} — {{ row.title or '' }}</h2>
+      <p><strong>Current genre:</strong> {{ row.current_genre or '' }}<br>
+      <strong>Proposed genre:</strong> {{ row.proposed_genre }}<br>
+      <strong>Method:</strong> {{ row.method }}<br>
+      <strong>Review note:</strong> {{ row.note }}</p>
+      <p>{{ local_status }} ·
+        {% if spotify %}<a href="{{ spotify }}">Spotify linked</a>{% else %}Spotify unlinked{% endif %} ·
+        {% if soundcloud %}<a href="{{ soundcloud }}">SoundCloud linked</a>{% else %}SoundCloud unlinked{% endif %} ·
+        Audit Spotify status: {{ spotify_status }}</p>
+      <p>{% for link in source_links %}<a href="{{ link }}" target="_blank" rel="noopener noreferrer">Source {{ loop.index }}</a> {% else %}No source links{% endfor %}</p>
+      <details><summary>Full source evidence</summary><pre>{{ evidence_pretty }}</pre></details>
+      {% if newer_evidence_pretty is not none %}
+        <details><summary>Newer audit evidence (decision retained)</summary><pre>{{ newer_evidence_pretty }}</pre></details>
+      {% endif %}
+      <p><small>{{ row.track_path }}</small></p>
+      <form method="post" action="/genres/decide">
+        <input type="hidden" name="path" value="{{ row.track_path }}">
+        <input type="hidden" name="status" value="{{ status }}">
+        <label>Reviewer <input name="actor" required value="{{ row.decision_by or '' }}"></label>
+        <label>Genre <select name="genre">
+          {% for genre in taxonomy %}<option value="{{ genre }}" {% if genre == row.current_genre %}selected{% endif %}>{{ genre }}</option>{% endfor %}
+        </select></label>
+        <label>Decision note <textarea name="note">{{ row.note }}</textarea></label>
+        <div class="actions">
+          <button name="action" value="approve">Approve proposed</button>
+          <button name="action" value="correct">Correct to selected</button>
+          <button name="action" value="defer">Defer</button>
+        </div>
+      </form>
+      <p><small>Last decision: {{ row.decision_by or 'none' }} {{ row.decision_at or '' }}</small></p>
+    </article>
+  {% else %}
+    <p>No tracks in this view.</p>
+  {% endif %}
+</main>
+{% endblock %}

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} · Crate Digger{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/discover.css">{% endblock %}
+
+{% block header %}
+<header>
+  <a href="/">Crate Digger</a>
+  <h1>{{ title }}</h1>
+  <nav class="site-nav" aria-label="Main navigation">
+    <a href="/">Collection</a>
+    <a href="/discover" aria-current="page">Discover</a>
+    <a href="/genres">Genre review</a>
+  </nav>
+</header>
+{% endblock %}
+
+{% block content %}<main id="main">{{ body | safe }}</main>{% endblock %}
+{% block scripts %}{% if javascript %}<script src="/static/discover.js" defer></script>{% endif %}{% endblock %}

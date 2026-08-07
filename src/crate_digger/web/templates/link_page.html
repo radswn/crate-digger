@@ -1,0 +1,19 @@
+{% extends "link.html" %}
+
+{% block content %}
+<main id="main" class="wrap wrap-compact">
+  {% if state == 'idle' %}
+    <div class="link-layout">
+      <p class="empty">Choose a track from the collection list to search Spotify.</p>
+      <a class="button" href="/">Back to collection</a>
+    </div>
+  {% elif state == 'done' %}
+    <div class="link-layout">
+      <p class="empty">That local track is no longer in the collection index.</p>
+      <a class="button" href="/">Back to collection</a>
+    </div>
+  {% else %}
+    {{ content | safe }}
+  {% endif %}
+</main>
+{% endblock %}

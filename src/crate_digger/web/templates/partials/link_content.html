@@ -1,0 +1,27 @@
+<div class="linkbar">
+  {% if not partial %}<a class="button" href="{{ return_to }}">Collection</a>{% endif %}
+  <form method="post" action="/spotify-link/skip">
+    <input type="hidden" name="path" value="{{ track.path }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <button type="submit">Skip</button>
+  </form>
+  <a class="button" href="{{ previous_href }}" data-spotify-modal-url="{{ previous_modal_url }}">Previous results</a>
+  <a class="button" href="{{ next_href }}" data-spotify-modal-url="{{ next_modal_url }}">More results</a>
+</div>
+<section class="link-layout">
+  <div class="local-track">
+    {{ cover | safe }}
+    <div>
+      <h2>{{ track.display_title }}</h2>
+      <p>{{ track.display_artist }}</p>
+      <p>{{ track.album or 'Unknown album' }}</p>
+      <p class="path">{{ short_path }}</p>
+    </div>
+  </div>
+  <div class="candidate-list">
+    <p class="query">Spotify search: {{ search_query }}</p>
+    {% if lookup_error %}<p class="empty">{{ lookup_error }}</p>
+    {% elif candidate_rows %}{{ candidate_rows | safe }}
+    {% else %}<p class="empty">No Spotify results for this query.</p>{% endif %}
+  </div>
+</section>

@@ -1,0 +1,73 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  {% if not items %}
+    <section class="session-head"><h2>Session #{{ session.session_id }}</h2></section>
+    <p>No eligible tracks were found for this session.</p>
+    <form method="post" action="/discover/build">
+      <input type="hidden" name="size" value="30">
+      <button>Build a new session</button>
+    </form>
+  {% else %}
+    {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+    <section class="session-head">
+      <div>
+        <h2>Session #{{ session.session_id }}</h2>
+        <p>{{ decided }}/{{ items | length }} reviewed · {{ pending }} left for later</p>
+      </div>
+      <div class="head-actions">
+        {% if run and run.state != 'ended' %}
+          {% if run.state == 'ending' %}
+            <p class="run-note">Playlist cleanup is pending.
+              <a target="_blank" rel="noreferrer" href="{{ run.playlist_url }}">Inspect playlist ↗</a>
+            </p>
+          {% else %}
+            <a class="playlist-link" target="_blank" rel="noreferrer" href="{{ run.playlist_url }}">Open Spotify playlist ↗</a>
+          {% endif %}
+        {% elif pending %}
+          <form method="post" action="/discover/listening">
+            <input type="hidden" name="session_id" value="{{ session.session_id }}">
+            <button name="action" value="start">Start listening</button>
+          </form>
+        {% endif %}
+        {% if session.status == 'completed' and (not run or run.state == 'ended') %}
+          <form method="post" action="/discover/build">
+            <input type="hidden" name="size" value="30">
+            <button>Build next 30-track session</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+    {% if pending %}
+      <form id="session-review" method="post" action="/discover/finish">
+        <input type="hidden" name="session_id" value="{{ session.session_id }}">
+        <div class="review-top">
+          <p><strong id="review-count">0</strong> selected ·
+            <strong id="review-unmarked">{{ pending }}</strong> unmarked</p>
+          <button class="primary" type="button" id="finish-open">Finish session</button>
+        </div>
+        {% include "partials/discover_grid.html" %}
+        <dialog id="finish-dialog" aria-labelledby="finish-title">
+          <h2 id="finish-title">Finish this listening session?</h2>
+          <p id="finish-summary">Choose what to do with unmarked songs.</p>
+          <div class="finish-actions">
+            <button class="primary" type="submit" name="unmarked" value="later">Leave unmarked for later</button>
+            <button type="submit" name="unmarked" value="skip">Skip unmarked songs</button>
+            <button type="button" id="finish-cancel">Cancel</button>
+          </div>
+        </dialog>
+        <noscript><p>JavaScript is needed to review tracks in this page.</p></noscript>
+      </form>
+    {% else %}
+      {% if run and run.state != 'ended' %}
+        <form method="post" action="/discover/finish" class="review-top">
+          <input type="hidden" name="session_id" value="{{ session.session_id }}">
+          <button class="primary" name="unmarked" value="later">{{ 'Retry playlist cleanup' if run.state == 'ending' else 'Finish and clear playlist' }}</button>
+        </form>
+      {% endif %}
+      {% include "partials/discover_grid.html" %}
+    {% endif %}
+  {% endif %}
+</main>
+{% endblock %}

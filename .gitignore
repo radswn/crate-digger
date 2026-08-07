@@ -1,4 +1,5 @@
 .vscode/
+.agents/
 
 .venv/
 .env
@@ -11,6 +12,9 @@ notebooks/
 
 .spotipy_cache/
 .crate_digger_state/
+docs/
+# Personal DJ-library exports and generated migration reports.
+/exports/
 __pycache__/
 .pytest_cache/
 .ruff_cache/

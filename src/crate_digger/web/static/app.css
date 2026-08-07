@@ -1,0 +1,50 @@
+:root {
+  color-scheme: light;
+  --ink: #191b22;
+  --muted: #636978;
+  --line: #d8dce5;
+  --panel: #f6f7f9;
+  --paper: #f7f6f0;
+  --bg: #fff;
+  --accent: #0f766e;
+  --accent-2: #b45309;
+  --focus: #164fba;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 100;
+  top: 8px;
+  left: 8px;
+  padding: 8px 12px;
+  background: #fff;
+  color: #17201f;
+  transform: translateY(-150%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.site-nav a[aria-current="page"] {
+  font-weight: 750;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+.table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}

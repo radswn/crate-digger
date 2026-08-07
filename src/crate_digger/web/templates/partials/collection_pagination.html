@@ -1,0 +1,5 @@
+<nav class="pagination" aria-label="Pagination">
+  {{ previous_link | safe }}
+  <span>Page {{ view.query.page }} of {{ view.total_pages }}</span>
+  {{ next_link | safe }}
+</nav>

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} · Crate Digger{% endblock %}
+{% block styles %}<link rel="stylesheet" href="/static/link.css">{% endblock %}
+
+{% block header %}
+<header>
+  <div class="wrap topbar">
+    <h1>{{ title }}</h1>
+    <div class="summary">
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/">Collection</a>
+        <a href="/discover">Discover</a>
+        <a href="/genres">Genre review</a>
+      </nav>
+      <div class="metric"><strong>{{ summary }}</strong></div>
+    </div>
+  </div>
+</header>
+{% endblock %}
+
+{% block content %}{% endblock %}

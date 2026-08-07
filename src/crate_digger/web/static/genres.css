@@ -1,0 +1,22 @@
+* { box-sizing: border-box; }
+body { margin: 0; color: var(--ink); font: 16px/1.5 system-ui, sans-serif; }
+a { color: var(--accent); }
+.genre-header, .genre-main { width: min(850px, calc(100% - 32px)); margin: 0 auto; }
+.genre-header { padding: 20px 0 12px; border-bottom: 1px solid var(--line); }
+.genre-header h1 { margin: 16px 0 0; }
+.genre-main { padding: 20px 0 40px; }
+.genre-views, .genre-pager { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 16px; }
+.genre-views a[aria-current="page"] { font-weight: 750; }
+.genre-progress { color: var(--muted); }
+.genre-card { border: 1px solid var(--line); border-radius: 10px; padding: clamp(16px, 3vw, 24px); }
+.genre-card h2 { margin-top: 0; overflow-wrap: anywhere; }
+.genre-card label { display: block; margin: 16px 0; }
+.genre-card input, .genre-card select, .genre-card textarea {
+  display: block; width: 100%; max-width: 36rem; padding: 8px; font: inherit;
+  border: 1px solid var(--line); border-radius: 5px;
+}
+.genre-card textarea { min-height: 5rem; }
+.genre-card button { padding: 10px 16px; margin: 4px 4px 4px 0; background: var(--accent); color: #fff; border: 0; border-radius: 5px; cursor: pointer; }
+.genre-card pre, .genre-card small { overflow-wrap: anywhere; }
+.genre-card pre { white-space: pre-wrap; }
+.error { color: #a00; }

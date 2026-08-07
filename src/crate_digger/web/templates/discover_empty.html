@@ -1,0 +1,14 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <section class="empty">
+    <h2>No discovery session yet</h2>
+    <p>Index the existing catalogue, then build a 30-track session.</p>
+    <form method="post" action="/discover/build">
+      <input type="hidden" name="size" value="30">
+      <button type="submit">Build 30-track session</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

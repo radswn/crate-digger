@@ -32,8 +32,7 @@ def main() -> None:
         type=Path,
         default=DEFAULT_BACKFILLED_LABELS_PATH,
         help=(
-            "Path to backfilled_labels.json. "
-            f"Default: {DEFAULT_BACKFILLED_LABELS_PATH}"
+            f"Path to backfilled_labels.json. Default: {DEFAULT_BACKFILLED_LABELS_PATH}"
         ),
     )
     parser.add_argument(

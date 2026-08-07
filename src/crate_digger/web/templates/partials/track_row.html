@@ -1,0 +1,17 @@
+<tr {% if track.comment %}title="{{ track.comment }}"{% endif %}>
+  <td class="cover-cell">{{ cover | safe }}</td>
+  <td>
+    <div class="track-title">{{ track.display_title }}</div>
+    <div class="path">{{ short_path }}</div>
+  </td>
+  <td>{{ comment_action | safe }}</td>
+  <td>{{ track.display_artist }}</td>
+  <td>{{ track.album or '' }}</td>
+  <td>{{ track.genre or '' }}</td>
+  <td>{{ track.release_date or '' }}</td>
+  <td>{{ created_at }}</td>
+  <td><span class="pill">{{ track.audio_format or '?' }}</span></td>
+  <td>{{ bitrate }}</td>
+  <td>{{ duration }}</td>
+  <td class="spotify-cell">{{ spotify_action | safe }}</td>
+</tr>

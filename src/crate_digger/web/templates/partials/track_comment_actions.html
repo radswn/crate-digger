@@ -1,0 +1,15 @@
+<div class="comment-cell">
+  <div class="comment-preview{% if not track.comment %} muted{% endif %}">{{ track.comment or 'none' }}</div>
+  <div class="comment-actions">
+    <form method="post" action="/comment-cleanup/track">
+      <input type="hidden" name="path" value="{{ track.path }}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button class="spotify-action" type="submit">Clean</button>
+    </form>
+    <form method="post" action="/comment-clear/track">
+      <input type="hidden" name="path" value="{{ track.path }}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button class="spotify-action" type="submit">Clear</button>
+    </form>
+  </div>
+</div>

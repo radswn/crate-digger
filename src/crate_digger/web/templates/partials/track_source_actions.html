@@ -1,0 +1,45 @@
+<div class="spotify-actions">
+  {% if track.soundcloud_url %}
+    <a class="spotify-linked" href="{{ track.soundcloud_url }}" target="_blank" rel="noreferrer">SoundCloud</a>
+    <form method="post" action="/soundcloud-link/refresh-art">
+      <input type="hidden" name="path" value="{{ track.path }}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button class="spotify-action" type="submit">Art</button>
+    </form>
+    {% if track.audio_format and track.audio_format | upper == 'WAV' %}
+      <span class="spotify-linked" title="WAV has no standard embedded artwork support; Rekordbox may ignore cover art on tag reload.">WAV art limit</span>
+    {% endif %}
+  {% elif track.spotify_uri %}
+    {% if external_url %}
+      <a class="spotify-linked" href="{{ external_url }}" target="_blank" rel="noreferrer">Linked</a>
+    {% else %}<span class="spotify-linked">Linked</span>{% endif %}
+    {% if track.artwork_mime is none %}
+      <form method="post" action="/spotify-link/refresh-art">
+        <input type="hidden" name="path" value="{{ track.path }}">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button class="spotify-action" type="submit">Art</button>
+      </form>
+    {% endif %}
+  {% elif track.spotify_link_skipped_at %}
+    <span class="spotify-linked">Skipped</span>
+  {% else %}
+    <form method="post" action="/spotify-link/quick-link">
+      <input type="hidden" name="path" value="{{ track.path }}">
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button class="spotify-action" type="submit">Link</button>
+    </form>
+  {% endif %}
+  <a class="button spotify-action" href="{{ find_href }}" data-spotify-modal-url="{{ modal_url }}">Find</a>
+  <form class="spotify-url-form" method="post" action="/spotify-link/manual">
+    <input type="hidden" name="path" value="{{ track.path }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <input class="spotify-url-input" name="spotify_url" type="text" inputmode="url" placeholder="Spotify URL" aria-label="Spotify track URL">
+    <button class="spotify-action" type="submit">Use</button>
+  </form>
+  <form class="spotify-url-form" method="post" action="/soundcloud-link/manual">
+    <input type="hidden" name="path" value="{{ track.path }}">
+    <input type="hidden" name="return_to" value="{{ return_to }}">
+    <input class="spotify-url-input" name="soundcloud_url" type="text" inputmode="url" placeholder="SoundCloud URL" aria-label="SoundCloud track URL">
+    <button class="spotify-action soundcloud-action" type="submit">SC</button>
+  </form>
+</div>

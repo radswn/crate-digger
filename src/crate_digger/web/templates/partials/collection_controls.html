@@ -1,0 +1,27 @@
+<form class="controls" method="get">
+  <label>
+    Search
+    <input type="search" name="q" value="{{ view.query.q }}" placeholder="Title, artist, album, path">
+  </label>
+  <label>
+    Format
+    <select name="format">
+      <option value="">All formats</option>
+      {% for audio_format in view.formats %}
+        <option value="{{ audio_format }}" {% if view.query.audio_format == audio_format %}selected{% endif %}>{{ audio_format }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    Spotify
+    <select name="spotify">
+      {% for key, label in spotify_filters.items() %}
+        <option value="{{ key }}" {% if view.query.spotify == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <input type="hidden" name="sort" value="{{ view.query.sort }}">
+  <input type="hidden" name="direction" value="{{ view.query.direction }}">
+  <button type="submit">Apply</button>
+  <a class="button" href="/">Reset</a>
+</form>

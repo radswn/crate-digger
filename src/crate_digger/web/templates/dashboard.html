@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block styles %}<link rel="stylesheet" href="/static/dashboard.css">{% endblock %}
+
+{% block header %}
+<header>
+  <div class="wrap topbar">
+    <h1>Crate Digger</h1>
+    <div class="summary">
+      <nav class="site-nav" aria-label="Main navigation">
+        <a href="/" aria-current="page">Collection</a>
+        <a href="/discover">Discover</a>
+        <a href="/genres">Genre review ({{ genre_pending }})</a>
+      </nav>
+      <div class="metric"><strong>{{ view.total_count }}</strong>tracks</div>
+      <div class="metric"><strong>{{ music_dirs_count }}</strong>folders</div>
+    </div>
+  </div>
+</header>
+{% endblock %}
+
+{% block content %}
+<main id="main" class="wrap">
+  {{ controls | safe }}
+  {{ auto_artwork | safe }}
+  {{ comment_cleanup | safe }}
+  <div class="viewbar">
+    <span>Showing {{ showing_start }}-{{ showing_end }} of {{ view.filtered_count }} matching tracks</span>
+    {{ pagination | safe }}
+    <div class="viewbar-actions">
+      <form method="post" action="/spotify-artwork-refresh">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button type="submit">Run Spotify sweep</button>
+      </form>
+      <form method="post" action="/comment-cleanup">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button type="submit">Clean comments sweep</button>
+      </form>
+      <form method="post" action="/comment-clear">
+        <input type="hidden" name="return_to" value="{{ return_to }}">
+        <button type="submit">Clear comments sweep</button>
+      </form>
+      <form method="post" action="/reindex">
+        <button type="submit">Refresh index</button>
+      </form>
+    </div>
+  </div>
+  {% if not music_dirs_count %}<p class="empty">No collection directories configured.</p>
+  {% elif not view.tracks %}<p class="empty">No tracks match the current view.</p>{% endif %}
+  <div class="table-scroll">
+    <table class="table" {% if not view.tracks %}hidden{% endif %}>
+      <thead>
+        <tr>
+          <th class="cover-cell"></th>
+          <th style="width: 16%">{{ sort_links.title | safe }}</th>
+          <th style="width: 118px">Comment</th>
+          <th style="width: 10%">{{ sort_links.artist | safe }}</th>
+          <th style="width: 10%">{{ sort_links.album | safe }}</th>
+          <th style="width: 7%">{{ sort_links.genre | safe }}</th>
+          <th style="width: 7%">{{ sort_links.release_date | safe }}</th>
+          <th style="width: 7%">{{ sort_links.file_created_at | safe }}</th>
+          <th style="width: 6%">{{ sort_links.format | safe }}</th>
+          <th style="width: 7%">{{ sort_links.bitrate | safe }}</th>
+          <th style="width: 6%">{{ sort_links.duration | safe }}</th>
+          <th class="spotify-cell">Source</th>
+        </tr>
+      </thead>
+      <tbody>{{ rows | safe }}</tbody>
+    </table>
+  </div>
+  <dialog id="spotify-dialog" aria-labelledby="spotify-dialog-title">
+    <div class="modal-header">
+      <strong id="spotify-dialog-title">Spotify</strong>
+      <button class="modal-close" type="button" data-spotify-close>Close</button>
+    </div>
+    <div class="spotify-modal-body" id="spotify-dialog-content"></div>
+  </dialog>
+</main>
+{% endblock %}
+
+{% block scripts %}<script src="/static/dashboard.js" defer></script>{% endblock %}

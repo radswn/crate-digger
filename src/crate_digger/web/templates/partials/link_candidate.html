@@ -1,0 +1,19 @@
+<div class="candidate">
+  {{ cover | safe }}
+  <div>
+    <strong>{{ candidate.name }}</strong>
+    <p>{{ candidate.artists }}</p>
+    <p>{{ candidate.album }}</p>
+    <p class="path">{{ candidate.uri }}</p>
+  </div>
+  <div class="candidate-actions">
+    {% if candidate.external_url %}<a class="candidate-open" href="{{ candidate.external_url }}" target="_blank" rel="noreferrer">Open</a>{% endif %}
+    <form method="post" action="/spotify-link/link">
+      <input type="hidden" name="path" value="{{ track.path }}">
+      <input type="hidden" name="spotify_uri" value="{{ candidate.uri }}">
+      {% if candidate.image_url %}<input type="hidden" name="image_url" value="{{ candidate.image_url }}">{% endif %}
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <button type="submit">Link</button>
+    </form>
+  </div>
+</div>
