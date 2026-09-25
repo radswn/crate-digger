@@ -25,6 +25,7 @@ from crate_digger.discover.repository import (
     now_iso,
 )
 from crate_digger.discover.taste import rebuild_taste_index
+from crate_digger.discover.wishlist import _set_wanted
 
 
 def build_session(
@@ -235,6 +236,7 @@ def record_session_review(
     session_id: int,
     choices: dict[int, Literal["keep", "skip"]],
     unmarked: Literal["later", "skip"],
+    wants: dict[int, bool] | None = None,
 ) -> dict[str, int | str]:
     """Save a whole dashboard review, mapping its Skip to the old exact-track Pass."""
     if unmarked not in {"later", "skip"}:
@@ -246,6 +248,8 @@ def record_session_review(
     by_id = {item.item_id: item for item in items}
     if set(choices) - set(by_id):
         raise ValueError("Review contains an item outside this session")
+    if wants is not None and set(wants) - set(by_id):
+        raise ValueError("Wishlist choices contain an item outside this session")
     if any(choice not in {"keep", "skip"} for choice in choices.values()):
         raise ValueError("Review choices must be Keep or Skip")
     for item_id, choice in choices.items():
@@ -260,6 +264,14 @@ def record_session_review(
     kept = 0
     skipped = 0
     with connect(db_path) as conn:
+        if wants is not None:
+            for item_id, wanted in wants.items():
+                _set_wanted(
+                    conn,
+                    by_id[item_id].track.spotify_track_id,
+                    wanted,
+                    source=f"discovery_session:{session_id}",
+                )
         for item in items:
             if item.decision is not None:
                 continue
@@ -268,9 +280,18 @@ def record_session_review(
                 continue
             decision = "keep" if choice == "keep" else "pass"
             state = "kept" if choice == "keep" else "passed"
-            conn.execute(
-                "update discovery_session_items set decision = ?, decided_at = ? where id = ?",
+            cursor = conn.execute(
+                """update discovery_session_items
+                   set decision = ?, decided_at = ? where id = ? and decision is null""",
                 (decision, now, item.item_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("A reviewed item changed since the page was loaded")
+            conn.execute(
+                """insert into discovery_feedback_events
+                   (item_id, from_decision, to_decision, source, created_at)
+                   values (?, null, ?, 'dashboard_review', ?)""",
+                (item.item_id, decision, now),
             )
             conn.execute(
                 "update discovery_candidates set state = ?, feedback = ?, updated_at = ? where id = ?",
@@ -322,6 +343,20 @@ def get_session_item(
     )
 
 
+def feedback_history(
+    db_path: Path, session_id: int, item_id: int
+) -> list[dict[str, str | None]]:
+    if get_session_item(db_path, session_id, item_id) is None:
+        raise KeyError(f"Discovery session item not found: {item_id}")
+    with connect(db_path) as conn:
+        rows = conn.execute(
+            """select from_decision, to_decision, source, created_at
+               from discovery_feedback_events where item_id = ? order by id desc""",
+            (item_id,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def record_feedback(
     db_path: Path,
     *,
@@ -344,13 +379,21 @@ def record_feedback(
     }[decision]
     now = now_iso()
     with connect(db_path) as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             update discovery_session_items
             set decision = ?, decided_at = ?
-            where id = ? and session_id = ?
+            where id = ? and session_id = ? and decision is ?
             """,
-            (decision, now, item_id, session_id),
+            (decision, now, item_id, session_id, item.decision),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError("Feedback changed since it was loaded")
+        conn.execute(
+            """insert into discovery_feedback_events
+               (item_id, from_decision, to_decision, source, created_at)
+               values (?, ?, ?, 'feedback_api', ?)""",
+            (item_id, item.decision, decision, now),
         )
         conn.execute(
             """

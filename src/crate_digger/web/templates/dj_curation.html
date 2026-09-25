@@ -1,0 +1,59 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <p><a href="/wishlist">← Wishlist</a></p>
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  <section class="wishlist-card">
+    <h2>{{ track.artist or 'Unknown artist' }} — {{ track.title or 'Untitled' }}</h2>
+    <p>{{ track.path }}</p>
+    <p>Imported and embedded values are shown for comparison. Saving makes a manual decision in SQLite; publishing file tags is a separate previewed action.</p>
+    <p><a href="/curate/tags?{{ {'path': track.path} | urlencode }}">Preview file tag publication</a></p>
+    <div class="curation-layout">
+      <div>
+        <h3>Reviewed DJ metadata</h3>
+        <form method="post" action="/curate" class="curation-form">
+          <input type="hidden" name="path" value="{{ track.path }}">
+          <label>Broad genre <select name="genre"><option value="">Unreviewed</option>{% for genre in taxonomy %}<option value="{{ genre }}" {% if track.approved_genre == genre %}selected{% endif %}>{{ genre }}</option>{% endfor %}</select></label>
+          <label>Energy <select name="energy"><option value="">Unreviewed</option>{% for energy in range(1, 6) %}<option value="{{ energy }}" {% if track.energy == energy %}selected{% endif %}>{{ energy }}</option>{% endfor %}</select></label>
+          <label>Tone <select name="tone"><option value="">Unreviewed</option>{% for tone, name in ((-2, '−2 dark/tense'), (-1, '−1'), (0, '0 neutral'), (1, '+1'), (2, '+2 bright/uplifting')) %}<option value="{{ tone }}" {% if track.tone == tone %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+          <fieldset><legend>Character (choose up to two)</legend>{% for tag in character_tags %}<label><input type="checkbox" name="character" value="{{ tag }}" {% if tag in track.character %}checked{% endif %}> {{ tag }}</label>{% endfor %}</fieldset>
+          <label>Vocal presence <select name="vocal_presence"><option value="">Unreviewed</option>{% for choice in vocal_options %}<option value="{{ choice }}" {% if track.vocal_presence == choice %}selected{% endif %}>{{ choice | title }}</option>{% endfor %}</select></label>
+          <label>Collection category <select name="collection_category"><option value="">Unreviewed</option>{% for category in categories %}<option value="{{ category }}" {% if track.collection_category == category %}selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+          <button class="primary" type="submit">Save reviewed metadata</button>
+        </form>
+      </div>
+      <aside>
+        <h3>Source evidence</h3>
+        <p>Embedded genre: {{ track.embedded_genre or 'None' }}</p>
+        {% for source in track.imported_genres %}<p>{{ source.source | title }} genre: {{ source.genre }}</p>{% endfor %}
+        <p>Artwork: {% if track.artwork_mime %}Present ({{ track.artwork_mime }}){% else %}Missing{% endif %}</p>
+        <p>{{ track.duration_seconds or '?' }} s · {{ track.audio_format or '?' }} · {% if track.bitrate %}{{ (track.bitrate / 1000) | round | int }} kbps{% else %}Unknown bitrate{% endif %}</p>
+        <h3>Intake checklist</h3>
+        <p>Approvals expire when their underlying evidence changes. Use an explained override when a check cannot be completed.</p>
+        {% for check in intake_checks %}
+          <section class="intake-check">
+            <h4>{{ check.label }} <span class="status-pill">{{ check.status }}</span></h4>
+            <p>{{ check.instruction }} {{ check.evidence }}.</p>
+            {% if check.note %}<p>Review note: {{ check.note }}</p>{% endif %}
+            <form method="post" action="/curate/check">
+              <input type="hidden" name="path" value="{{ track.path }}">
+              <input type="hidden" name="check_key" value="{{ check.key }}">
+              <input type="hidden" name="fingerprint" value="{{ check.fingerprint }}">
+              <label>Note or override reason <textarea name="note" rows="2">{{ check.note }}</textarea></label>
+              <label><input type="checkbox" name="confirmed" value="yes" required> I reviewed this check.</label>
+              <div class="wishlist-actions">
+                <button name="decision" value="approved" {% if not check.can_approve %}disabled title="Required evidence is missing"{% endif %}>Approve</button>
+                <button name="decision" value="overridden">Override with reason</button>
+              </div>
+            </form>
+          </section>
+        {% endfor %}
+        <p>Traktor readiness: preview/export pending. Completing intake does not publish tags or playlists.</p>
+      </aside>
+    </div>
+    <details><summary>Decision history ({{ history | length }})</summary><ul>{% for event in history %}<li>{{ event.created_at[:16] }} · {{ event.source }} · {{ event.after.genre or 'no genre' }} · E{{ event.after.energy or '?' }} · Tone {{ event.after.tone if event.after.tone is not none else '?' }} · {{ event.after.character | join(', ') }}</li>{% endfor %}</ul></details>
+    <details><summary>Intake history ({{ intake_history | length }})</summary><ul>{% for event in intake_history %}<li>{{ event.created_at[:16] }} · {{ event.check_key }}: {{ event.from_decision or 'pending' }} → {{ event.to_decision }}{% if event.note %} · {{ event.note }}{% endif %}</li>{% endfor %}</ul></details>
+  </section>
+</main>
+{% endblock %}

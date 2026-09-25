@@ -5,8 +5,10 @@ from xml.etree import ElementTree as ET
 
 import pytest
 
+from crate_digger.collection.dj_curation import save_curation
 from crate_digger.collection.index import _delete_missing_tracks, _ensure_schema
 from crate_digger.collection.matching import PathMap
+from crate_digger.collection.saved_collections import save_collection
 from crate_digger.collection.traktor_organization import (
     _traktor_process,
     apply,
@@ -127,6 +129,62 @@ def test_import_review_preview_apply_and_idempotence(tmp_path: Path):
         conn.execute("pragma foreign_keys=on")
         _delete_missing_tracks(conn, set())
         assert conn.execute("select count(*) from traktor_entries").fetchone()[0] == 5
+
+
+def test_saved_collection_rules_materialize_as_guarded_traktor_playlists(
+    tmp_path: Path,
+):
+    source, db, maps = _setup(tmp_path)
+    import_nml(source, db, maps)
+    odd = next(row for row in review(db) if row["title"] == "Odd")
+    set_category(db, odd["id"], "LISTENING")
+    song_path = str(tmp_path / "audio" / "Download" / "song.mp3")
+    save_curation(
+        db,
+        song_path,
+        genre="House",
+        energy=2,
+        tone=1,
+        character=["funky"],
+        vocal_presence=None,
+        collection_category="DOWNLOAD",
+    )
+    save_collection(
+        db,
+        name="Bright Funky",
+        description="E2–3 bright/funky",
+        rule={
+            "min_energy": 2,
+            "max_energy": 3,
+            "min_tone": 1,
+            "character_tags": ["funky"],
+        },
+    )
+    report = preview(source, db, tmp_path / "saved-preview")
+    assert report["playlist_counts"]["Saved Collections / Bright Funky"] == 1
+    assert report["saved_collections"][0]["not_in_traktor"] == 0
+    rendered = ET.parse(report["snapshot"]).getroot()
+    playlist = rendered.find(
+        ".//NODE[@NAME='Saved Collections']/SUBNODES/NODE[@NAME='Bright Funky']/PLAYLIST"
+    )
+    assert playlist is not None and playlist.get("ENTRIES") == "1"
+    key = playlist.find("ENTRY/PRIMARYKEY")
+    assert key is not None and key.get("KEY") == "C:/:Download/:song.mp3"
+    save_curation(
+        db,
+        song_path,
+        genre="House",
+        energy=2,
+        tone=-1,
+        character=["funky"],
+        vocal_presence=None,
+        collection_category="DOWNLOAD",
+    )
+    with pytest.raises(ValueError, match="Saved collections changed"):
+        apply(Path(report["report"]))
+    fresh = preview(source, db, tmp_path / "fresh-preview")
+    assert fresh["playlist_counts"]["Saved Collections / Bright Funky"] == 0
+    assert apply(Path(fresh["report"]), tmp_path / "backups")["changed"] is True
 
 
 def test_changed_source_and_manual_override_reimport(tmp_path: Path):

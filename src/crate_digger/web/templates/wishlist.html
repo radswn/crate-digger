@@ -1,0 +1,39 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  <div class="wishlist-intro">
+    <div><h2>Download wishlist</h2><p>Download intent lives here, independently of Keep and Skip. Spotify playlist import is a one-time migration action.</p></div>
+    <form method="post" action="/wishlist/import-preview"><button type="submit">Preview to-download import</button></form>
+  </div>
+  <p><a href="/discover">Review a session</a> · {% if show_removed %}<a href="/wishlist">Hide removed</a>{% else %}<a href="/wishlist?show_removed=true">Show removed</a>{% endif %}</p>
+  {% if tracks %}
+    <div class="wishlist-list">
+      {% for track in tracks %}
+        <article class="wishlist-card">
+          <h3>{{ track.title }} <span class="status-pill">{{ track.status | replace('_', ' ') }}</span></h3>
+          <p>{{ track.artist_name }}{% if track.release_title %} · {{ track.release_title }}{% endif %}{% if track.feedback %} · Taste: {{ track.feedback }}{% endif %}</p>
+          <p>{% if track.local_track_path %}Linked local file: {{ track.local_track_path }}{% elif track.status == 'wanted' %}Next: search for the selected recording.{% elif track.status == 'searching' %}Next: review search results and verify a local file.{% elif track.status == 'unavailable' %}Next: retry the search when another source is available.{% elif track.status == 'removed' %}Removed from the active wishlist.{% else %}Review the linked file and its metadata before export.{% endif %}</p>
+          {% if track.external_url %}<a target="_blank" rel="noreferrer" href="{{ track.external_url }}">Open Spotify recording ↗</a>{% endif %}
+          <div class="wishlist-actions">
+            {% if track.local_track_path %}<a class="playlist-link" href="/curate?{{ {'path': track.local_track_path} | urlencode }}">Curate linked file</a>{% endif %}
+            {% if track.status == 'removed' %}
+              <form method="post" action="/wishlist/update"><input type="hidden" name="spotify_track_id" value="{{ track.spotify_track_id }}"><button name="action" value="restore">Restore Want</button></form>
+            {% else %}
+              {% if not track.local_track_path %}<a class="playlist-link" href="/wishlist/{{ track.spotify_track_id }}/match">Match local file</a>{% endif %}
+              {% if track.status in ('wanted', 'unavailable') %}<form method="post" action="/wishlist/update"><input type="hidden" name="spotify_track_id" value="{{ track.spotify_track_id }}"><button name="action" value="searching">Mark searching</button></form>{% endif %}
+              {% if track.status == 'searching' %}<form method="post" action="/wishlist/update"><input type="hidden" name="spotify_track_id" value="{{ track.spotify_track_id }}"><button name="action" value="unavailable">Mark unavailable</button></form>{% endif %}
+              {% if track.status in ('searching', 'unavailable') %}<form method="post" action="/wishlist/update"><input type="hidden" name="spotify_track_id" value="{{ track.spotify_track_id }}"><button name="action" value="wanted">Retry later</button></form>{% endif %}
+              <form method="post" action="/wishlist/update"><input type="hidden" name="spotify_track_id" value="{{ track.spotify_track_id }}"><button name="action" value="remove">Remove Want</button></form>
+            {% endif %}
+          </div>
+          <details><summary>Decision history ({{ track.events | length }})</summary><ul>{% for event in track.events %}<li>{{ event.created_at[:16] }} · {{ event.from_status or 'candidate' }} → {{ event.to_status }} · {{ event.source }}{% if event.note %} · {{ event.note }}{% endif %}</li>{% endfor %}</ul></details>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <section class="empty"><p>No tracks in this view. Mark Want during session review or preview the playlist import.</p></section>
+  {% endif %}
+</main>
+{% endblock %}

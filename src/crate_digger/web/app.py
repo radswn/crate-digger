@@ -45,6 +45,7 @@ from crate_digger.utils.config import get_settings
 from crate_digger.utils.logging import get_logger
 from crate_digger.utils.spotify import get_spotify_client
 from crate_digger.web.discover import create_discover_router
+from crate_digger.web.collections import create_saved_collections_router
 from crate_digger.web.genres import create_genres_router, pending_count
 from crate_digger.web.templating import STATIC_DIR, render_template
 
@@ -185,6 +186,7 @@ def create_app(
     app = FastAPI(title="Crate Digger Dashboard", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(create_discover_router(db_path, config_path))
+    app.include_router(create_saved_collections_router(db_path))
     app.include_router(create_genres_router(db_path))
 
     @app.get("/health")

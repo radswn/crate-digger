@@ -1,10 +1,11 @@
 <div class="song-grid" style="--rows-desktop:{{ (items | length + 2) // 3 }};--rows-tablet:{{ (items | length + 1) // 2 }};--rows-mobile:{{ items | length }}">
   {% for item in items %}
     <div class="song{% if item.decision is not none %} reviewed{% endif %}" data-pending="{{ 'true' if item.decision is none else 'false' }}">
-      <div class="song-name" title="{{ item.track.title }} — {{ item.track.artist_name }}">
+      <div class="song-name" tabindex="-1" aria-label="Track {{ item.position }}: {{ item.track.title }} by {{ item.track.artist_name }}" title="{{ item.track.title }} — {{ item.track.artist_name }}">
         <span class="number">{{ '%02d' | format(item.position) }}</span>
-        <span class="song-text"><strong>{{ item.track.title }}</strong><small>{{ item.track.artist_name }}</small></span>
+        <span class="song-text"><strong>{{ item.track.title }}</strong><small>{{ item.track.artist_name }}</small><small class="progress">{% if item.decision is not none %}Reviewed{% elif hearing.get(item.item_id) == 'confirmed heard' %}Reached in listening run{% elif hearing.get(item.item_id) == 'observed heard' %}Possibly heard{% else %}Not heard yet{% endif %}{% if wishlist_statuses.get(item.track.spotify_track_id) not in (none, 'removed') %} · {{ wishlist_statuses[item.track.spotify_track_id] | replace('_', ' ') }}{% endif %}</small></span>
       </div>
+      <label class="want-choice"><input type="hidden" name="want_{{ item.item_id }}" value="0"><input type="checkbox" name="want_{{ item.item_id }}" value="1" {% if wishlist_statuses.get(item.track.spotify_track_id) not in (none, 'removed') %}checked{% endif %}><span>Want</span></label>
       <div class="choices" role="group" aria-label="Review {{ item.track.title }}">
         {% for choice, label in (('keep', 'Keep'), ('skip', 'Skip')) %}
           <label class="choice {{ choice }}"><input type="checkbox" name="decision_{{ item.item_id }}" value="{{ choice }}" {% if item.decision == choice or (item.decision == 'pass' and choice == 'skip') %}checked{% endif %} {% if item.decision is not none %}disabled{% endif %}><span>{{ label }}</span></label>

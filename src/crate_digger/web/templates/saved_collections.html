@@ -1,0 +1,35 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  <h2>Saved collections</h2>
+  <p>Rules live in Crate Digger and match reviewed DJ fields. Each preview is a current snapshot; it does not edit Traktor.</p>
+  {% if collections %}
+    <div class="wishlist-list">
+      {% for collection in collections %}
+        <article class="wishlist-card"><h3>{{ collection.name }}</h3><p>{{ collection.description }}</p><p>Energy {{ collection.rule.min_energy if collection.rule.min_energy is not none else 'any' }}–{{ collection.rule.max_energy if collection.rule.max_energy is not none else 'any' }} · Tone {{ collection.rule.min_tone if collection.rule.min_tone is not none else 'any' }}–{{ collection.rule.max_tone if collection.rule.max_tone is not none else 'any' }}{% if collection.rule.character_tags %} · {{ collection.rule.character_tags | join(' + ') }}{% endif %}{% if collection.rule.genre %} · {{ collection.rule.genre }}{% endif %}</p><a href="/collections/{{ collection.id }}">Preview matches</a> · <a href="/collections?edit={{ collection.id }}">Edit rule</a></article>
+      {% endfor %}
+    </div>
+  {% else %}<p>No saved collections yet.</p>{% endif %}
+  {% set rule = selected.rule if selected else {} %}
+  <section class="wishlist-card">
+    <h3>{{ 'Edit rule' if selected else 'Create a collection' }}</h3>
+    <form method="post" action="/collections/save" class="curation-form">
+      {% if selected %}<input type="hidden" name="collection_id" value="{{ selected.id }}">{% endif %}
+      <label>Name <input name="name" maxlength="80" required value="{{ selected.name if selected else '' }}"></label>
+      <label>Description <textarea name="description" maxlength="500" rows="2">{{ selected.description if selected else '' }}</textarea></label>
+      <div class="rule-bounds">
+        <label>Minimum Energy <input type="number" name="min_energy" min="1" max="5" value="{{ rule.min_energy if rule.min_energy is not none else '' }}"></label>
+        <label>Maximum Energy <input type="number" name="max_energy" min="1" max="5" value="{{ rule.max_energy if rule.max_energy is not none else '' }}"></label>
+        <label>Minimum Tone <input type="number" name="min_tone" min="-2" max="2" value="{{ rule.min_tone if rule.min_tone is not none else '' }}"></label>
+        <label>Maximum Tone <input type="number" name="max_tone" min="-2" max="2" value="{{ rule.max_tone if rule.max_tone is not none else '' }}"></label>
+      </div>
+      <fieldset><legend>Required Character tags (up to two)</legend>{% for tag in character_tags %}<label><input type="checkbox" name="character_tags" value="{{ tag }}" {% if tag in rule.get('character_tags', []) %}checked{% endif %}> {{ tag }}</label>{% endfor %}</fieldset>
+      <label>Broad genre <select name="genre"><option value="">Any</option>{% for genre in taxonomy %}<option value="{{ genre }}" {% if rule.genre == genre %}selected{% endif %}>{{ genre }}</option>{% endfor %}</select></label>
+      <label>Collection category <select name="collection_category"><option value="">Any</option>{% for category in categories %}<option value="{{ category }}" {% if rule.collection_category == category %}selected{% endif %}>{{ category }}</option>{% endfor %}</select></label>
+      <button class="primary" type="submit">Save rule</button>
+    </form>
+  </section>
+</main>
+{% endblock %}

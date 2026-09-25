@@ -553,6 +553,75 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute(
+        """create table if not exists dj_curation (
+            track_path text primary key references tracks(path) on delete cascade,
+            approved_genre text,
+            tone integer check (tone between -2 and 2),
+            character_json text not null default '[]',
+            vocal_presence text check (vocal_presence in ('instrumental', 'mixed', 'vocal')),
+            collection_category text,
+            updated_at text not null
+        )"""
+    )
+    conn.execute(
+        """create table if not exists dj_curation_events (
+            id integer primary key autoincrement,
+            track_path text not null references tracks(path) on delete cascade,
+            before_json text not null,
+            after_json text not null,
+            source text not null,
+            created_at text not null
+        )"""
+    )
+    conn.execute(
+        "create index if not exists idx_dj_curation_events_track on dj_curation_events(track_path, id)"
+    )
+    conn.execute(
+        """create table if not exists dj_intake_checks (
+            track_path text not null references tracks(path) on delete cascade,
+            check_key text not null,
+            decision text not null check (decision in ('approved', 'overridden')),
+            evidence_fingerprint text not null,
+            note text not null default '',
+            checked_at text not null,
+            primary key (track_path, check_key)
+        )"""
+    )
+    conn.execute(
+        """create table if not exists dj_intake_check_events (
+            id integer primary key autoincrement,
+            track_path text not null references tracks(path) on delete cascade,
+            check_key text not null,
+            from_decision text,
+            to_decision text not null,
+            evidence_fingerprint text not null,
+            note text not null,
+            created_at text not null
+        )"""
+    )
+    conn.execute(
+        "create index if not exists idx_dj_intake_check_events_track on dj_intake_check_events(track_path, id)"
+    )
+    conn.execute(
+        """create table if not exists dj_saved_collections (
+            id integer primary key autoincrement,
+            name text not null unique collate nocase,
+            description text not null default '',
+            rule_json text not null,
+            created_at text not null,
+            updated_at text not null
+        )"""
+    )
+    conn.execute(
+        """create table if not exists dj_saved_collection_events (
+            id integer primary key autoincrement,
+            collection_id integer not null references dj_saved_collections(id) on delete cascade,
+            before_json text,
+            after_json text not null,
+            created_at text not null
+        )"""
+    )
+    conn.execute(
         """
         create table if not exists track_tags (
             track_path text not null,

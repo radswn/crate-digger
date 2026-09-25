@@ -423,6 +423,46 @@ def _rows_and_fingerprint(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], 
     return rows, _digest(json.dumps(state, ensure_ascii=False).encode())
 
 
+def _saved_collection_specs(
+    db_path: Path, rows: list[sqlite3.Row]
+) -> tuple[list[dict], str]:
+    # Imported at call time: saved_collections validates categories against this module.
+    from crate_digger.collection.saved_collections import (
+        list_saved_collections,
+        preview_collection,
+    )
+
+    keys_by_path: dict[str, list[str]] = {}
+    for row in rows:
+        if row["track_path"]:
+            keys_by_path.setdefault(str(row["track_path"]), []).append(
+                str(row["location_key"])
+            )
+    specs: list[dict] = []
+    for collection in list_saved_collections(db_path):
+        matches = preview_collection(db_path, int(collection["id"]))
+        paths = [str(track["path"]) for track in matches]
+        location_keys = sorted(
+            {key for path in paths for key in keys_by_path.get(path, [])}
+        )
+        specs.append(
+            {
+                "id": collection["id"],
+                "name": collection["name"],
+                "rule": collection["rule"],
+                "matched_paths": paths,
+                "location_keys": location_keys,
+                "not_in_traktor": len(
+                    [path for path in paths if path not in keys_by_path]
+                ),
+            }
+        )
+    fingerprint = _digest(
+        json.dumps(specs, sort_keys=True, ensure_ascii=False).encode()
+    )
+    return specs, fingerprint
+
+
 def review(db_path: Path) -> list[dict]:
     with _connect_readonly(db_path) as conn:
         rows, _ = _rows_and_fingerprint(conn)
@@ -517,7 +557,12 @@ def _comment2_after(before: str | None, category: str) -> str:
 
 
 def _playlist(
-    parent: ET.Element, name: str, selected: list[ET.Element], old_uuids: dict[str, str]
+    parent: ET.Element,
+    name: str,
+    selected: list[ET.Element],
+    old_uuids: dict[str, str],
+    *,
+    uuid_key: str | None = None,
 ) -> int:
     selected.sort(
         key=lambda e: (
@@ -532,8 +577,8 @@ def _playlist(
         "PLAYLIST",
         ENTRIES=str(len(selected)),
         TYPE="LIST",
-        UUID=old_uuids.get(name)
-        or uuid5(NAMESPACE_URL, "crate-digger-cleanup/" + name).hex,
+        UUID=(old_uuids.get(name) if uuid_key is None else None)
+        or uuid5(NAMESPACE_URL, "crate-digger-cleanup/" + (uuid_key or name)).hex,
     )
     for entry in selected:
         member = ET.SubElement(body, "ENTRY")
@@ -543,8 +588,12 @@ def _playlist(
 
 
 def _render(
-    original: ET.Element, entries: list[ET.Element], rows: list[sqlite3.Row]
+    original: ET.Element,
+    entries: list[ET.Element],
+    rows: list[sqlite3.Row],
+    saved_specs: list[dict] | None = None,
 ) -> tuple[bytes, list[dict], dict]:
+    saved_specs = saved_specs or []
     categories = {row["location_key"]: row["category"] for row in rows}
     if len(categories) != len(entries) or set(categories) != {
         location_key(e) for e in entries
@@ -613,14 +662,34 @@ def _render(
         counts[name] = _playlist(
             utility_nodes, name, groups.get(category, []).copy(), old_uuids
         )
+    if saved_specs:
+        saved_folder = ET.SubElement(
+            children, "NODE", TYPE="FOLDER", NAME="Saved Collections"
+        )
+        saved_nodes = ET.SubElement(saved_folder, "SUBNODES", COUNT="0")
+        by_key = {location_key(entry): entry for entry in output_entries}
+        for spec in saved_specs:
+            selected = [by_key[key] for key in spec["location_keys"]]
+            counts[f"Saved Collections / {spec['name']}"] = _playlist(
+                saved_nodes,
+                spec["name"],
+                selected,
+                old_uuids,
+                uuid_key=f"saved:{spec['id']}",
+            )
+        children.set("COUNT", str(len(children)))
     output = ET.tostring(root, encoding="utf-8", xml_declaration=True)
-    _validate(original, _parse_xml(output), categories)
+    _validate(original, _parse_xml(output), categories, saved_specs)
     return output, changes, counts
 
 
 def _validate(
-    original: ET.Element, rendered: ET.Element, categories: dict[str, str]
+    original: ET.Element,
+    rendered: ET.Element,
+    categories: dict[str, str],
+    saved_specs: list[dict] | None = None,
 ) -> None:
+    saved_specs = saved_specs or []
     restored = copy.deepcopy(rendered)
     original_entries = [e for e in _collection(original) if e.tag == "ENTRY"]
     restored_entries = [e for e in _collection(restored) if e.tag == "ENTRY"]
@@ -665,9 +734,10 @@ def _validate(
         for node in folder.findall(".//NODE")
         if node.find("PLAYLIST") is not None
     }
-    if len(folder.findall(".//PLAYLIST")) != len(PLAYLISTS) or set(generated_nodes) != {
-        name for _, name, _ in PLAYLISTS
-    }:
+    if len(folder.findall(".//PLAYLIST")) != len(PLAYLISTS) + len(saved_specs):
+        raise ValueError("Generated playlist layout differs from expected layout")
+    built_in_names = {name for _, name, _ in PLAYLISTS}
+    if not built_in_names <= set(generated_nodes):
         raise ValueError("Generated playlist layout differs from expected layout")
     for category, name, _ in PLAYLISTS:
         body = generated_nodes[name]
@@ -687,6 +757,30 @@ def _validate(
             or not set(members) <= keys
         ):
             raise ValueError("Invalid generated playlist membership")
+    saved_folder = folder.find("SUBNODES/NODE[@NAME='Saved Collections']/SUBNODES")
+    if saved_specs and saved_folder is None:
+        raise ValueError("Saved collection folder missing")
+    if not saved_specs and saved_folder is not None:
+        raise ValueError("Unexpected saved collection folder")
+    if saved_folder is not None:
+        if len(saved_folder) != len(saved_specs):
+            raise ValueError("Saved collection playlist count changed")
+        original_by_key = {location_key(entry): entry for entry in original_entries}
+        for spec, node in zip(saved_specs, saved_folder, strict=True):
+            body = node.find("PLAYLIST")
+            if node.get("NAME") != spec["name"] or body is None:
+                raise ValueError("Saved collection playlist changed")
+            members = [e.find("PRIMARYKEY").get("KEY") for e in body]
+            expected = sorted(
+                spec["location_keys"],
+                key=lambda key: (
+                    original_by_key[key].get("ARTIST", "").casefold(),
+                    original_by_key[key].get("TITLE", "").casefold(),
+                    key,
+                ),
+            )
+            if members != expected or int(body.get("ENTRIES", "-1")) != len(expected):
+                raise ValueError("Invalid saved collection membership")
     uuids = [
         node.get("UUID")
         for node in rendered.findall(".//PLAYLIST") + rendered.findall(".//SMARTLIST")
@@ -710,7 +804,8 @@ def preview(source: Path, db_path: Path, output_dir: Path) -> dict:
         or imported["source_file"] != str(source.resolve())
     ):
         raise ValueError("NML differs from imported source; import it again")
-    output, changes, counts = _render(root, entries, rows)
+    saved_specs, saved_fingerprint = _saved_collection_specs(db_path, rows)
+    output, changes, counts = _render(root, entries, rows, saved_specs)
     if source.read_bytes() != data:
         raise ValueError("Source changed during preview")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -724,11 +819,22 @@ def preview(source: Path, db_path: Path, output_dir: Path) -> dict:
         "database": str(db_path.resolve()),
         "source_sha256": _digest(data),
         "database_sha256": db_fingerprint,
+        "saved_collections_sha256": saved_fingerprint,
         "snapshot": str(snapshot.resolve()),
         "snapshot_sha256": _digest(output),
         "total": len(entries),
         "categories": dict(Counter(row["category"] for row in rows)),
         "playlist_counts": counts,
+        "saved_collections": [
+            {
+                "id": spec["id"],
+                "name": spec["name"],
+                "matched_tracks": len(spec["matched_paths"]),
+                "in_traktor": len(spec["location_keys"]),
+                "not_in_traktor": spec["not_in_traktor"],
+            }
+            for spec in saved_specs
+        ],
         "changed_comment2": sum(
             c["comment2_before"] != c["comment2_after"] for c in changes
         ),
@@ -826,13 +932,18 @@ def apply(preview_report: Path, backup_dir: Path | None = None) -> dict:
         rows, db_fingerprint = _rows_and_fingerprint(conn)
     if db_fingerprint != report["database_sha256"]:
         raise ValueError("Categories changed after preview; make a fresh preview")
+    saved_specs, saved_fingerprint = _saved_collection_specs(db_path, rows)
+    if saved_fingerprint != report.get("saved_collections_sha256"):
+        raise ValueError(
+            "Saved collections changed after preview; make a fresh preview"
+        )
     if live == proposed:
         return {"changed": False, "backup": None, "source": str(source)}
     if _digest(live) != report["source_sha256"]:
         raise ValueError("NML changed after preview; make a fresh preview")
     root = _parse_xml(live)
     entries = [e for e in _collection(root) if e.tag == "ENTRY"]
-    regenerated, _, _ = _render(root, entries, rows)
+    regenerated, _, _ = _render(root, entries, rows, saved_specs)
     if regenerated != proposed:
         raise ValueError("Preview snapshot does not match current database")
     destination = backup_dir or source.parent / ".crate-digger-backups"
@@ -858,7 +969,12 @@ def apply(preview_report: Path, backup_dir: Path | None = None) -> dict:
         os.replace(temporary, source)
         replaced = True
         written = _parse_xml(source.read_bytes())
-        _validate(root, written, {row["location_key"]: row["category"] for row in rows})
+        _validate(
+            root,
+            written,
+            {row["location_key"]: row["category"] for row in rows},
+            saved_specs,
+        )
         if _digest(source.read_bytes()) != report["snapshot_sha256"]:
             raise ValueError("Written NML failed fingerprint validation")
     except Exception as error:

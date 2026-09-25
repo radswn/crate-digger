@@ -343,6 +343,10 @@ def list_eligible_candidates(
         "c.state in ('new', 'skipped')",
         "t.local_track_path is null",
         """not exists (
+            select 1 from discovery_wishlist w
+            where w.spotify_track_id = c.spotify_track_id and w.status != 'removed'
+        )""",
+        """not exists (
             select 1 from discovery_playlist_memberships positive
             where positive.spotify_track_id = c.spotify_track_id
               and positive.source_type = 'curated_positive'

@@ -1,0 +1,14 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <p><a href="/collections">← Saved collections</a></p>
+  <h2>{{ collection.name }}</h2>
+  <p>{{ collection.description }}</p>
+  <p>{{ tracks | length }} matching indexed tracks. This is a live database preview; no playlist or file tags were written.</p>
+  {% if tracks %}
+    <div class="wishlist-list">{% for track in tracks %}<article class="wishlist-card"><h3>{{ track.artist or 'Unknown artist' }} — {{ track.title or 'Untitled' }}</h3><p>E{{ track.energy if track.energy is not none else '?' }} · Tone {{ track.tone if track.tone is not none else '?' }} · {{ track.character | join(', ') }} · {{ track.approved_genre or 'No reviewed genre' }}</p><p>{{ track.path }}</p><a href="/curate?{{ {'path': track.path} | urlencode }}">Review curation</a></article>{% endfor %}</div>
+  {% else %}<p>No reviewed tracks match this rule yet.</p>{% endif %}
+  <details><summary>Rule history ({{ history | length }})</summary><ul>{% for event in history %}<li>{{ event.created_at[:16] }} · {{ event.after.name }}</li>{% endfor %}</ul></details>
+</main>
+{% endblock %}

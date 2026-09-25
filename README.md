@@ -296,6 +296,11 @@ Traktor to be closed, backs up the exact live NML, and writes
 `organization-apply.json` with the backup path. A source edit or category change requires
 a fresh import or preview as indicated by the command's error. Only generated `[CD_*]`
 tokens in `INFO.RATING` and the `Crate Digger` playlist folder are changed.
+Saved rules from the dashboard's `/collections` page also produce playlists under
+`Crate Digger → Saved Collections` in this preview. Only tracks already linked to
+entries in the imported NML can be included; the report lists how many matching
+tracks are not yet in Traktor. Rule or matching changes invalidate the preview before
+apply. The rules remain in SQLite, while Traktor receives a playlist snapshot.
 
 #### Broad genre review and Traktor writeback
 
@@ -576,6 +581,38 @@ Track Profile classification remains separate: Keep does not infer energy, role,
 or tags, and DJ-software/audio metadata is never modified. A kept Spotify candidate stays
 preserved in discovery; if that Spotify ID is later linked to an indexed local file, the
 local path is attached to the indexed track.
+
+### Download wishlist and local matching
+
+The Discovery review grid has a separate **Want** choice for each track. Finishing a
+review saves Want and taste choices together in SQLite. The [wishlist dashboard](http://127.0.0.1:8765/wishlist)
+shows search progress, next actions, and a decision history. Mark a track searching,
+unavailable, or ready to retry there. Want does not change taste ranking, and an active
+wishlist track is not offered again in a new Discovery session.
+
+For migration, **Preview to-download import** reads the configured playlist and lists
+the distinct tracks it would bring into SQLite. Import rereads the playlist and stops
+if its contents changed. It never edits the Spotify playlist, and a track deliberately
+removed from the SQLite wishlist stays removed on later imports.
+
+To connect a wanted recording to an existing indexed local file, use **Match local
+file**. Search by title, artist, or path, inspect the candidate's metadata, and confirm
+that it is the exact recording and mix. The file must still match the collection scan's
+size and modification time. Confirmation links the SQLite records and marks the track
+as needing curation; it does not edit audio tags or declare it Traktor-ready. The
+review grid has visible, editable keyboard shortcuts stored in the browser.
+
+For a linked file, **Curate linked file** opens one review form for broad genre,
+Energy (1–5), Tone (−2 to +2), up to two Character tags, vocal presence, and collection
+category. The form shows embedded genre, imported source genres, artwork presence, and
+an intake checklist. Each check records an approval or explained override; changed
+identity, file, artwork, metadata, or classification evidence makes that decision
+stale. Decisions and their history stay in SQLite; imported and embedded values remain
+available for comparison. **Preview file tag publication** shows the exact Genre and
+managed DJ comment changes. Applying requires confirmation, rejects a changed file or
+review, edits and verifies a copy, saves an exact backup beside the original, and
+refreshes the index. Traktor may need a manual tag refresh; its import behavior has
+not yet been verified in a live collection. Audio integrity still requires listening.
 
 Discovery is deterministic and heuristic-based. It does not use machine learning,
 embeddings, Spotify recommendations, related-artist crawling, Spotify audio features, or

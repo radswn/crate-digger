@@ -1,0 +1,28 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <p><a href="/curate?{{ {'path': preview.path} | urlencode }}">← Curation</a></p>
+  <section class="wishlist-card">
+    <h2>File tag preview</h2>
+    <p>{{ preview.path }}</p>
+    {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+    <p>The reviewed Genre will replace the file's Genre tag. The managed DJ block will be added to or updated within one comment; other comment text remains.</p>
+    <h3>Genre</h3>
+    <p>{{ preview.before.genre or '(empty)' }} → {{ preview.after.genre }}</p>
+    <h3>Comments before</h3>
+    {% if preview.before.comments %}<ul>{% for comment in preview.before.comments %}<li><pre>{{ comment }}</pre></li>{% endfor %}</ul>{% else %}<p>(empty)</p>{% endif %}
+    <h3>Managed comment after</h3>
+    <pre>{{ preview.after.comment }}</pre>
+    {% if preview.change_needed %}
+      <p>Applying edits a verified copy, saves an exact backup beside the original, replaces the file, and refreshes the collection index. Traktor may need a manual tag refresh.</p>
+      <form method="post" action="/curate/tags">
+        <input type="hidden" name="path" value="{{ preview.path }}">
+        <input type="hidden" name="fingerprint" value="{{ preview.fingerprint }}">
+        <label><input type="checkbox" name="confirmed" value="yes" required> I reviewed these file tag changes.</label>
+        <button class="primary" type="submit">Publish tags to audio file</button>
+      </form>
+    {% else %}<p>File tags already match the reviewed values.</p>{% endif %}
+  </section>
+</main>
+{% endblock %}

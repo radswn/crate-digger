@@ -9,7 +9,9 @@
   <h1>{{ title }}</h1>
   <nav class="site-nav" aria-label="Main navigation">
     <a href="/">Collection</a>
-    <a href="/discover" aria-current="page">Discover</a>
+    <a href="/discover" {% if title == 'Discovery' %}aria-current="page"{% endif %}>Discover</a>
+    <a href="/wishlist" {% if title in ('Wishlist', 'Import preview', 'Match local file', 'Curation') %}aria-current="page"{% endif %}>Wishlist</a>
+    <a href="/collections" {% if title in ('Collections', 'Collection preview') %}aria-current="page"{% endif %}>Collections</a>
     <a href="/genres">Genre review</a>
   </nav>
 </header>

@@ -298,18 +298,37 @@ def _playlist_tracks(client: Any, playlist_uri: str) -> list[dict[str, Any]]:
     tracks: list[dict[str, Any]] = []
     offset = 0
     while True:
-        page = client.playlist_items(
-            playlist_uri,
-            limit=100,
-            offset=offset,
-            additional_types=("track",),
-        )
+        playlist_id = spotify_id(playlist_uri, "playlist")
+        if playlist_id and callable(getattr(client, "_get", None)):
+            # Spotipy's playlist_items helper still uses Spotify's old /tracks URL.
+            page = client._get(
+                f"playlists/{playlist_id}/items", limit=50, offset=offset
+            )
+            page_size = 50
+        else:
+            page = client.playlist_items(
+                playlist_uri,
+                limit=100,
+                offset=offset,
+                additional_types=("track",),
+            )
+            page_size = 100
         for item in page.get("items", []):
-            if isinstance(item, dict) and isinstance(item.get("track"), dict):
-                tracks.append(item["track"])
+            payload = (
+                item.get("item") or item.get("track")
+                if isinstance(item, dict)
+                else None
+            )
+            if isinstance(payload, dict) and (
+                payload.get("type") in (None, "track")
+                and str(payload.get("uri", "")).startswith("spotify:track:")
+            ):
+                tracks.append(payload)
+            else:
+                tracks.append({})  # Retain unavailable entries for import counts.
         if not page.get("next"):
             return tracks
-        offset += 100
+        offset += page_size
 
 
 def _string(value: object) -> str | None:

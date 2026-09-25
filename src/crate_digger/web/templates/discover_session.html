@@ -14,7 +14,7 @@
     <section class="session-head">
       <div>
         <h2>Session #{{ session.session_id }}</h2>
-        <p>{{ decided }}/{{ items | length }} reviewed · {{ pending }} left for later</p>
+        <p>{{ decided }}/{{ items | length }} reviewed · {{ pending }} undecided · <a href="/wishlist">View wishlist</a></p>
       </div>
       <div class="head-actions">
         {% if run and run.state != 'ended' %}
@@ -39,35 +39,46 @@
         {% endif %}
       </div>
     </section>
-    {% if pending %}
+    <section aria-labelledby="review-inbox-title">
+      <h3 id="review-inbox-title">Review inbox</h3>
+      <p class="inbox-help">Recent Spotify plays are suggestions. Confirmed progress marks tracks you reached. Taste and Want are separate choices.</p>
+      <details class="shortcut-panel"><summary>Keyboard shortcuts</summary>
+        <p>Choose a row with Next/Previous, mark taste with Keep/Skip, toggle Want, then finish the session. Shortcuts work when you are not typing in a text field.</p>
+        <div id="shortcut-settings" class="shortcut-settings">
+          {% for action, label, key in (('next', 'Next track', 'j'), ('previous', 'Previous track', 'k'), ('keep', 'Keep', '1'), ('skip', 'Skip', '2'), ('want', 'Want', 'w'), ('finish', 'Finish', 'f')) %}
+            <label>{{ label }} <input type="text" inputmode="text" maxlength="1" data-shortcut="{{ action }}" value="{{ key }}" aria-label="{{ label }} shortcut"></label>
+          {% endfor %}
+          <button type="button" id="shortcut-save">Save shortcuts</button>
+          <button type="button" id="shortcut-reset">Reset</button>
+          <span id="shortcut-message" role="status"></span>
+        </div>
+      </details>
       <form id="session-review" method="post" action="/discover/finish">
         <input type="hidden" name="session_id" value="{{ session.session_id }}">
         <div class="review-top">
-          <p><strong id="review-count">0</strong> selected ·
-            <strong id="review-unmarked">{{ pending }}</strong> unmarked</p>
-          <button class="primary" type="button" id="finish-open">Finish session</button>
+          {% if pending %}
+            <p><strong id="review-count">0</strong> selected ·
+              <strong id="review-unmarked">{{ pending }}</strong> unmarked</p>
+            <button class="primary" type="button" id="finish-open">Finish session</button>
+          {% else %}
+            <button class="primary" type="submit" name="unmarked" value="later">{% if run and run.state == 'ending' %}Retry playlist cleanup{% elif run and run.state != 'ended' %}Finish and clear playlist{% else %}Save Want choices{% endif %}</button>
+          {% endif %}
         </div>
         {% include "partials/discover_grid.html" %}
-        <dialog id="finish-dialog" aria-labelledby="finish-title">
-          <h2 id="finish-title">Finish this listening session?</h2>
-          <p id="finish-summary">Choose what to do with unmarked songs.</p>
-          <div class="finish-actions">
-            <button class="primary" type="submit" name="unmarked" value="later">Leave unmarked for later</button>
-            <button type="submit" name="unmarked" value="skip">Skip unmarked songs</button>
-            <button type="button" id="finish-cancel">Cancel</button>
-          </div>
-        </dialog>
-        <noscript><p>JavaScript is needed to review tracks in this page.</p></noscript>
+        {% if pending %}
+          <dialog id="finish-dialog" aria-labelledby="finish-title">
+            <h2 id="finish-title">Finish this listening session?</h2>
+            <p id="finish-summary">Choose what to do with unmarked songs.</p>
+            <div class="finish-actions">
+              <button class="primary" type="submit" name="unmarked" value="later">Leave unmarked for later</button>
+              <button type="submit" name="unmarked" value="skip">Skip unmarked songs</button>
+              <button type="button" id="finish-cancel">Cancel</button>
+            </div>
+          </dialog>
+          <noscript><p>Choose reviews and Want, then use the finish buttons below. JavaScript enables the summary dialog.</p><button name="unmarked" value="later">Save, leave unmarked for later</button><button name="unmarked" value="skip">Save, skip unmarked</button></noscript>
+        {% endif %}
       </form>
-    {% else %}
-      {% if run and run.state != 'ended' %}
-        <form method="post" action="/discover/finish" class="review-top">
-          <input type="hidden" name="session_id" value="{{ session.session_id }}">
-          <button class="primary" name="unmarked" value="later">{{ 'Retry playlist cleanup' if run.state == 'ending' else 'Finish and clear playlist' }}</button>
-        </form>
-      {% endif %}
-      {% include "partials/discover_grid.html" %}
-    {% endif %}
+    </section>
   {% endif %}
 </main>
 {% endblock %}

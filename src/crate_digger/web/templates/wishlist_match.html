@@ -1,0 +1,36 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <p><a href="/wishlist">← Wishlist</a></p>
+  {% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+  {% if track %}
+    <h2>Match {{ track.title }} · {{ track.artist_name }}</h2>
+    <p>Search indexed local files, then compare title, artist, duration, format, and path. Confirm only the exact recording and mix. This links SQLite records; it does not edit the audio file.</p>
+    <form method="get" action="/wishlist/{{ track.spotify_track_id }}/match">
+      <label>Search local collection <input type="search" name="q" value="{{ q }}" required></label>
+      <button type="submit">Search</button>
+    </form>
+    {% if matches %}
+      <h3>Indexed files</h3>
+      <ul>{% for match in matches %}<li>{{ match.title or '(untitled)' }} · {{ match.artist or 'Unknown artist' }} · {{ match.duration_seconds or '?' }} s · {{ match.audio_format or '?' }} · <a href="/wishlist/{{ track.spotify_track_id }}/match?{{ {'q': q, 'path': match.path} | urlencode }}">Review match</a><br><small>{{ match.path }}</small></li>{% endfor %}</ul>
+    {% elif q %}<p>No indexed files matched that search.</p>{% endif %}
+    {% if selected %}
+      <section class="wishlist-card" aria-labelledby="match-review-title">
+        <h3 id="match-review-title">Review exact recording</h3>
+        <p><strong>Wanted:</strong> {{ selected.spotify_title }} · {{ selected.spotify_artist }} · {{ selected.spotify_uri }}</p>
+        <p><strong>Local:</strong> {{ selected.title or '(untitled)' }} · {{ selected.artist or 'Unknown artist' }} · {{ selected.album or '(no album)' }}</p>
+        <p>{{ selected.duration_seconds or '?' }} s · {{ selected.audio_format or '?' }} · {% if selected.bitrate %}{{ (selected.bitrate / 1000) | round | int }} kbps{% else %}Unknown bitrate{% endif %} · {{ selected.size }} bytes</p>
+        <p>{{ selected.path }}</p>
+        <form method="post" action="/wishlist/{{ track.spotify_track_id }}/match">
+          <input type="hidden" name="path" value="{{ selected.path }}">
+          <input type="hidden" name="fingerprint" value="{{ selected.fingerprint }}">
+          <input type="hidden" name="q" value="{{ q }}">
+          <label><input type="checkbox" name="verified" value="yes" required> I verified that this file is the exact recording and mix.</label>
+          <p><button class="primary" type="submit">Link file and start curation</button></p>
+        </form>
+      </section>
+    {% endif %}
+  {% endif %}
+</main>
+{% endblock %}

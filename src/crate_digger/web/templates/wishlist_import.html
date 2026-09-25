@@ -1,0 +1,14 @@
+{% extends "discover.html" %}
+
+{% block content %}
+<main id="main">
+  <h2>Import preview</h2>
+  <p>Source: {{ playlist_uri }}. {{ preview.total }} playlist entries read; {{ preview.tracks | length }} distinct tracks, {{ preview.new_count }} new to the wishlist, {{ preview.skipped }} skipped. Existing removed tracks stay removed.</p>
+  <p>The playlist will not be changed. Import reads it again and stops if its track list changed.</p>
+  {% if preview.tracks %}
+    <form method="post" action="/wishlist/import"><input type="hidden" name="fingerprint" value="{{ preview.fingerprint }}"><input type="hidden" name="playlist_uri" value="{{ playlist_uri }}"><button class="primary" type="submit">Import into SQLite wishlist</button></form>
+    <ol>{% for track in preview.tracks %}<li>{{ track.title }} · {{ track.artists | map(attribute=1) | join(', ') }}</li>{% endfor %}</ol>
+  {% endif %}
+  <p><a href="/wishlist">Back to wishlist</a></p>
+</main>
+{% endblock %}

@@ -175,6 +175,16 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
             foreign key (session_id) references discovery_sessions(id) on delete cascade,
             foreign key (candidate_id) references discovery_candidates(id)
         );
+        create table if not exists discovery_feedback_events (
+            id integer primary key autoincrement,
+            item_id integer not null references discovery_session_items(id) on delete cascade,
+            from_decision text,
+            to_decision text not null,
+            source text not null,
+            created_at text not null
+        );
+        create index if not exists idx_discovery_feedback_events_item
+            on discovery_feedback_events(item_id, id);
 
         create table if not exists discovery_spotify_playlist (
             id integer primary key check (id = 1),
@@ -216,6 +226,32 @@ def ensure_discovery_schema(conn: sqlite3.Connection) -> None:
             source text not null,
             primary key (run_id, item_id, played_at, source)
         );
+
+        create table if not exists discovery_wishlist (
+            spotify_track_id text primary key references discovery_tracks(spotify_track_id)
+                on delete cascade,
+            status text not null check (status in (
+                'wanted', 'searching', 'acquired', 'needs_curation',
+                'ready', 'unavailable', 'removed'
+            )),
+            source text not null,
+            created_at text not null,
+            updated_at text not null
+        );
+        create table if not exists discovery_wishlist_events (
+            id integer primary key autoincrement,
+            spotify_track_id text not null references discovery_tracks(spotify_track_id)
+                on delete cascade,
+            from_status text,
+            to_status text not null,
+            source text not null,
+            note text,
+            created_at text not null
+        );
+        create index if not exists idx_discovery_wishlist_status
+            on discovery_wishlist(status, updated_at);
+        create index if not exists idx_discovery_wishlist_events_track
+            on discovery_wishlist_events(spotify_track_id, id);
 
         create table if not exists discovery_label_explorations (
             id integer primary key autoincrement,
